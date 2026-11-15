@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fulfillment-priority-logic"
+version = "0.1.0"
+description = "Fulfillment Priority Logic: compose objectives in [0, 1] with power means, priorities and importance."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Bassel El Mabsout" }]
+keywords = ["logic", "power mean", "multi-objective", "optimization", "specification", "fulfillment"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+torch = ["torch>=2.1"]
+jax = ["jax>=0.4.20"]
+warp = ["warp-lang>=1.5"]
+
+[project.urls]
+Paper = "https://arxiv.org/abs/2503.05818"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ty>=0.0.104",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fulfillment_priority_logic"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# the notation uses ∧ ∨ ¬ − on purpose
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+testpaths = ["validation", "src"]
+# The docstring examples run as tests too. The optional backends hold none, and their libraries may be missing.
+addopts = "--doctest-modules --ignore=src/fulfillment_priority_logic/backends --ignore=src/fulfillment_priority_logic/warp_funcs.py"
+
+[tool.ty.environment]
+python = ".venv"
+
+[[tool.ty.overrides]]
+# Warp kernels are typed with Warp's own annotations, such as wp.array(dtype=Any).
+include = ["src/fulfillment_priority_logic/warp_funcs.py", "src/fulfillment_priority_logic/backends/warp.py"]
+rules = { invalid-type-form = "ignore" }
