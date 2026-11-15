@@ -2,18 +2,20 @@
 
 A backend module has the functions of `Backend`. The numpy, torch and jax backends leave the numerics to
 `fulfillment_priority_logic.math`; the warp backend runs kernels built from `fulfillment_priority_logic.warp_funcs`.
+None of them knows the kinds of node: each node computes its value with the backend's `Ops`.
 """
 
 from __future__ import annotations
 
 import importlib
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Literal, Protocol, cast
 
 import numpy as np
 
 from .. import math
+from ..ops import Ops
 
 type BackendName = Literal["numpy", "torch", "jax", "warp"]
 """The backends that `evaluate` can use."""
@@ -26,8 +28,8 @@ class Backend(Protocol):
         """The inputs of one evaluation as this backend's arrays, on one device and in one float type."""
         ...
 
-    def stack(self, xs: Sequence[Any]) -> Any:
-        """The arrays broadcast to one shape and stacked along a new first axis."""
+    def ops(self, given: Mapping[str, Any]) -> Ops:
+        """The toolkit that the nodes compute with, over the converted inputs `given`."""
         ...
 
     def to_numpy(self, x: Any) -> np.ndarray:

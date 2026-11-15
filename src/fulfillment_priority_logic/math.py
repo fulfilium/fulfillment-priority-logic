@@ -180,6 +180,11 @@ def min_fulfillment(score: float, n: int, p: float) -> float:
     return inner ** (1 / p) if inner > 0 else 0.0
 
 
+def stop_gradient(x: Any) -> Any:
+    """`x` with no gradient flowing back through it: `detach` in torch, `lax.stop_gradient` in jax, `x` in numpy."""
+    return _stop_gradient(library(x), x)
+
+
 def library(x: object) -> Library:
     """The library that `x` comes from: torch or jax for their arrays, numpy for anything else.
 

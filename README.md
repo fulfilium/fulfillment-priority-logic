@@ -27,14 +27,14 @@ print(evaluate(spec, {"temperature": 19.5, "kwh": 5.0, "quiet": 0.8}))
 
 ```text
 warm ∧₋₂ [cheap ∧₀ quiet]₀.₃
-∧₋₂                                        0.596
-├─ warm piecewise 14→0, 18→0.1, 21→1       0.550
-│  └─ temperature                          19.500
-└─ [·]₀.₃                                  0.657
-   └─ ∧₀                                   0.510
-      ├─ cheap piecewise 2→1, 6→0.1, 10→0  0.325
-      │  └─ kwh                            5.000
-      └─ quiet                             0.800
+· ∧₋₂ ·                                         0.596
+├─ warm: piecewise(·; 14→0, 18→0.1, 21→1)       0.550
+│  └─ temperature                               19.500
+└─ [·]₀.₃                                       0.657
+   └─ · ∧₀ ·                                    0.510
+      ├─ cheap: piecewise(·; 2→1, 6→0.1, 10→0)  0.325
+      │  └─ kwh                                 5.000
+      └─ quiet                                  0.800
 ```
 
 The room is at 19.5 °C, which counts as 0.55 warm. The heater uses 5 kWh, which counts as 0.325 cheap. The score
@@ -64,8 +64,8 @@ inside it. Names are Python identifiers, optionally joined by dots.
 not associative, so that differs from `And(a, b, c)`. Write `And(a, b, c, p=...)` for an "and" of several parts.
 The paper uses p ≤ 0 for "and" and "or"; the library accepts any p.
 
-Formulas are frozen dataclasses, so they compare and hash by structure and work with `match`. They also have tree
-operations: `nodes()`, `leaves()`, `fold`, `transform`, `replace` and `rename`.
+Formulas are frozen dataclasses, so they compare and hash by structure and work with `match`. The functions
+`nodes`, `leaves`, `fold`, `transform`, `replace` and `rename` walk and rewrite them.
 
 ## Writing a good specification
 
@@ -118,6 +118,69 @@ operations: `nodes()`, `leaves()`, `fold`, `transform`, `replace` and `rename`.
    does nothing     0.000
    ```
 
+## Adding your own node
+
+A node is a frozen dataclass that subclasses `Formula`. Its fields that hold formulas are its children. It says
+how it prints with `notation`, which gets the text of its children, and what it computes in one of two ways.
+
+A derived node defines `expand`, which returns a formula made of other nodes. Its value and gradient are those of
+that formula, but it prints as itself. A primitive node defines `compute`, which gets the values of its children
+and `ops`, the operators of the current backend: `p_mean`, `dual_p_mean`, `offset` and `piecewise` from
+`math.py`, `ops.stop_gradient`, and `ops.xp`, the array namespace (numpy, torch or jax.numpy). So a primitive node
+runs on every one of those backends, with gradients. The package's own nodes are written the same way. A node's
+children are the fields that hold a formula or a tuple of formulas; a formula held in any other shape is refused.
+
+```python
+from dataclasses import dataclass
+
+from fulfillment_priority_logic import And, Formula, Var, evaluate
+from fulfillment_priority_logic.nodes import subscript
+
+
+@dataclass(frozen=True)
+class Forall(Formula):
+    """Every part holds: a strict "and"."""
+
+    parts: tuple[Formula, ...]
+    p: float = -4.0
+
+    def expand(self):
+        return And(*self.parts, p=self.p)
+
+    def notation(self, *parts):
+        return f"∀{subscript(self.p)}({', '.join(parts)})"
+
+
+@dataclass(frozen=True)
+class Polynomial(Formula):
+    """c₀ + c₁·x + c₂·x² + …, clipped to [0, 1]."""
+
+    x: Formula
+    coeffs: tuple[float, ...]
+    measurements = ("x",)  # x is a measurement, not a fulfillment
+
+    def compute(self, ops, x):
+        return ops.xp.clip(sum(c * x**k for k, c in enumerate(self.coeffs)), 0.0, 1.0)
+
+    def notation(self, x):
+        return f"poly({x}; {', '.join(f'{c:g}' for c in self.coeffs)})"
+
+
+fan = Polynomial(Var("rpm"), (1.0, -0.1, -0.02))  # rpm in thousands: quiet when slow
+comfort = Forall((Var("warm"), Var("dry"), fan))
+print(comfort)
+print(evaluate(comfort, {"warm": 0.9, "dry": 0.8, "rpm": 3.0}))
+```
+
+```text
+∀₋₄(warm, dry, poly(rpm; 1, -0.1, -0.02))
+∀₋₄(·, ·, ·)                0.642
+├─ warm                     0.900
+├─ dry                      0.800
+└─ poly(·; 1, -0.1, -0.02)  0.520
+   └─ rpm                   3.000
+```
+
 ## Installation
 
 The package is not on PyPI yet. Install it from GitHub:
@@ -144,7 +207,7 @@ The backend is chosen from the type of the input arrays, or by name with `evalua
 | numpy | no | The reference. |
 | torch | yes, with autograd | |
 | jax | yes, and works under `jax.jit` | |
-| warp | no, values only | Runs as Warp kernels on the device of the input arrays (tested on the CPU). A batch can only be broadcast against single values. |
+| warp | no, values only | Runs as Warp kernels on the device of the input arrays (tested on the CPU). It runs the package's nodes, derived nodes, and nodes that compute only with the methods of `ops`; a node that does its own arithmetic runs on numpy, torch and jax. A batch can only be broadcast against single values. |
 
 With torch or jax the score is an ordinary tensor, so you can optimize it directly:
 

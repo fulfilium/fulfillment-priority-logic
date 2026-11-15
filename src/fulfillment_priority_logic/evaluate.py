@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, assert_never, cast, overload
+from collections.abc import Iterator, Mapping
+from typing import TYPE_CHECKING, Any, overload
 
 import numpy as np
 
-from . import backends, math
-from .nodes import And, Formula, Not, Offset, Or, Piecewise, Power, Var, fold_all
+from . import backends
+from .nodes import Formula, Var, check_names, child_fields, fold, fold_all, leaves, nodes, with_children
 from .printing import render_line, render_tree
 
 if TYPE_CHECKING:
@@ -62,16 +62,21 @@ def evaluate(
     is used for the whole batch. The backend follows the arrays' library (numpy, torch, jax or warp) unless you
     name it, and plain numbers go to the device and float type of the arrays.
 
-    With `check=True` every input must be free of NaN, and an input that is read as a fulfillment, not through
-    `.piecewise(...)`, must lie in [0, 1]. The check reads the smallest and largest value back from the device. It
-    is skipped where values cannot be read: inside `jax.jit`, `jax.vmap` or `jax.grad`, and inside `torch.func`
+    With `check=True` every input must be free of NaN, and an input that is read as a fulfillment must lie in
+    [0, 1]. An input is a measurement instead when it is read through `.piecewise(...)`, or through any field that
+    a node names in its `measurements`. The check reads the smallest and largest value back from the device. It is
+    skipped where values cannot be read: inside `jax.jit`, `jax.vmap` or `jax.grad`, and inside `torch.func`
     transforms. Set `check=False` to skip it everywhere, for example in a training loop on a GPU.
 
     >>> result = evaluate(Var("a") & Var("b"), {"a": 0.25, "b": 1.0})
     >>> round(float(result.value), 6)
     0.5
     """
-    expected = sorted(v.name for v in formula.leaves())
+    check_names(formula)
+    # Derived nodes are expanded first, so the inputs and their roles are read from the nodes that compute.
+    image = fold_all(formula, lambda node, below: _primitive(with_children(node, below)), {})
+    primitive = image[formula]
+    expected = sorted({v.name for v in leaves(primitive)})
     missing = [n for n in expected if n not in values]
     if missing:
         raise ValueError(
@@ -90,24 +95,21 @@ def evaluate(
             "Give every input the same shape, or a plain number to use for the whole batch."
         ) from None
     if check:
-        fulfillments = _fulfillment_inputs(formula)
+        fulfillments = _fulfillment_inputs(primitive)
         for n, x in inputs.items():
             _check_range(n, module.value_range(x), n in fulfillments)
 
+    ops = module.ops(inputs)
+
     def step(node: Formula, args: tuple[Any, ...]) -> Any:
         try:
-            match name:
-                case "warp":
-                    return cast(Any, module).apply(node, args, inputs)
-                case "numpy" | "torch" | "jax":
-                    return _apply(node, args, inputs, module)
-                case _:
-                    assert_never(name)
+            return node.compute(ops, *args)
         except Exception as e:
             e.add_note(f"while evaluating {node!r} with the {name} backend")
             raise
 
-    return Result(formula, name, fold_all(formula, step))
+    computed = fold_all(primitive, step, {})
+    return Result(formula, name, {n: computed[image[n]] for n in nodes(formula)})
 
 
 class Result[A](Mapping[Formula | str, A]):
@@ -127,7 +129,7 @@ class Result[A](Mapping[Formula | str, A]):
         self.backend = backend
         """The backend that computed the values."""
         self._values = values
-        self._names = {n.name: n for n in formula.nodes() if n.name is not None}
+        self._names = {n.name: n for n in nodes(formula) if n.name is not None}
 
     @property
     def value(self) -> A:
@@ -145,7 +147,7 @@ class Result[A](Mapping[Formula | str, A]):
         return key in self._names or key in self._values
 
     def __iter__(self) -> Iterator[Formula]:
-        return self.formula.nodes()
+        return nodes(self.formula)
 
     def __len__(self) -> int:
         return len(self._values)
@@ -153,22 +155,22 @@ class Result[A](Mapping[Formula | str, A]):
     def to_dict(self) -> dict[str, float | np.ndarray]:
         """The value of every part as a float, or a numpy array for a batch, keyed by name or by formula."""
         out: dict[str, float | np.ndarray] = {}
-        for node in self.formula.nodes():
+        for node in nodes(self.formula):
             a = self._numpy(node)
-            out.setdefault(node.name or node.formula(), float(a.item()) if a.size == 1 else a)
+            out.setdefault(node.name or repr(node), float(a.item()) if a.size == 1 else a)
         return out
 
-    def line(self, unicode: bool = True) -> str:
-        """Every node and its value on one line. A batch shows its mean, marked with ~.
+    def line(self) -> str:
+        """The formula on one line with the value of every node after it. A batch shows its mean, marked with ~.
 
         >>> evaluate((Var("a") & Var("b")).named("both"), {"a": 0.25, "b": 1.0}).line()
-        'both=∧₀:0.500⟨a:0.250 b:1.000⟩'
+        'both=(a:0.250 ∧₀ b:1.000):0.500'
         """
-        return render_line(self.formula, self._numpy, unicode)
+        return render_line(self.formula, self._numpy)
 
-    def tree(self, unicode: bool = True) -> str:
+    def tree(self) -> str:
         """The formula as a tree with the value of each node beside it. `print(result)` shows this."""
-        return render_tree(self.formula, unicode, self._numpy)
+        return render_tree(self.formula, self._numpy)
 
     def _numpy(self, node: Formula) -> np.ndarray:
         return backends.load(self.backend).to_numpy(self._values[node])
@@ -177,33 +179,21 @@ class Result[A](Mapping[Formula | str, A]):
         return self.tree()
 
 
-def _apply(node: Formula, args: Sequence[Any], inputs: Mapping[str, Any], module: backends.Backend) -> Any:
-    """The value of one node from the values of its children, with numpy, torch or jax arrays."""
-    match node:
-        case Var(name=name):
-            return inputs[name]
-        case And(p=p, slack=slack):
-            return math.p_mean(module.stack(args), p, slack, axis=0)
-        case Or(p=p, slack=slack):
-            return math.dual_p_mean(module.stack(args), p, slack, axis=0)
-        case Not():
-            return 1.0 - args[0]
-        case Offset(delta=delta, pass_gradient=pass_gradient):
-            return math.offset(args[0], delta, pass_gradient=pass_gradient)
-        case Power(w=w):
-            return args[0] ** w
-        case Piecewise(points=points):
-            return math.piecewise(args[0], points)
-        case _:
-            assert_never(node)
+def _primitive(node: Formula) -> Formula:
+    """The node, or its expansion with every derived node in it expanded too. Its children are already primitive."""
+    expansion = node.expand()
+    if expansion is None:
+        return node
+    return fold(expansion, lambda n, below: _primitive(with_children(n, below)))
 
 
 def _fulfillment_inputs(root: Formula) -> set[str]:
-    """The inputs that are read directly as fulfillments, as opposed to measurements fed to `.piecewise`."""
+    """The inputs that are read as fulfillments, as opposed to measurements, which a node names in `measurements`."""
     found = {root.name} if isinstance(root, Var) else set()
-    for node in root.nodes():
-        if not isinstance(node, Piecewise):
-            found |= {c.name for c in node.children if isinstance(c, Var)}
+    for node in nodes(root):
+        for field, group in child_fields(node):
+            if field not in node.measurements:
+                found |= {c.name for c in group if isinstance(c, Var)}
     return found
 
 

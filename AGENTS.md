@@ -14,28 +14,34 @@ Never skip, loosen or delete a test to make it pass. Find the cause.
 
 ## Rules
 
-1. **Formulas are frozen dataclasses, and a kind of node is a member of the union `Formula`.** Use a `Literal` for
-   a fixed set of names, as `BackendName` does. Do not use `Enum`, and do not use a `bool` or `None` to mean a state.
-2. **Check a value once, where it is made, and trust it afterwards.** `Offset._check` refuses a δ outside
-   [−1, 1]; the code that reads `delta` does not check it again. Do not check what the types already say, except
-   where untyped code enters: `_check_parts` refuses a number given as an operand, with a hint.
-3. **Match every case.** A `match` over a `Formula` or a `Literal` ends with `case _: assert_never(node)`, as in
-   `evaluate._apply` and `backends.warp.apply`. A new kind of node then fails type checking wherever it is missing.
-4. **The numerics live in `math.py`, and for Warp in `warp_funcs.py`, and nowhere else.** `math.py` imports only
+1. **The kinds of node are an open set.** A node is a frozen dataclass that subclasses `Formula` and defines
+   `notation`, and either `compute` or `expand`. The package's own nodes (`Var`, `And`, ..., `Piecewise`) are
+   written the same way, and no other code names them, except `Var` for the inputs. Do not add a `match` over
+   kinds of node; add a method to the nodes, or a fold.
+2. **An interpretation is a fold.** Evaluation, the one-line text, `transform` and `rename` are folds over
+   `children`, as `fold_all` in `evaluate` and `formula_text` show; the tree view walks top-down over folded
+   values. A node's children are its fields that hold a formula or a tuple of formulas, and nothing else may hold
+   one. `evaluate` expands derived nodes first, and reads the inputs and their roles from the expanded tree.
+3. **Closed sets are `Literal`s, and a `match` over one ends with `case _: assert_never(x)`,** as the libraries in
+   `math.py` do. Do not use `Enum`, and do not use a `bool` or `None` to mean a state.
+4. **Check a value once, where it is made, and trust it afterwards.** `Offset.__post_init__` refuses a δ outside
+   [−1, 1]; `Offset.compute` does not check it again. Do not check what the types already say, except where
+   untyped code enters: `check_operands` refuses a number given as an operand, with a hint.
+5. **The numerics live in `math.py`, and for Warp in `warp_funcs.py`, and nowhere else.** `math.py` imports only
    numpy and the standard library, and not the standard `math` module, so a reader can copy it alone.
-5. **A backend is one file in `backends/`** that converts inputs to its arrays and reads results back
-   (`inputs`, `stack`, `to_numpy`, `value_range`), and calls `math.py` for the numerics.
-6. **Use the type parameter syntax** (`def fold[R](...)`, `class Result[A]`, `type Formula = ...`), not `TypeVar`
-   or `Generic`. Use a `Protocol` for an interface, not an abstract base class.
-7. **Keep it simple.** Inline a one-line helper that has one caller. Do not add a parameter that no caller sets.
+6. **A backend is one file in `backends/`** that converts inputs to its arrays and reads results back
+   (`inputs`, `to_numpy`, `value_range`), and gives the nodes their `Ops`, which call `math.py`.
+7. **Use the type parameter syntax** (`def fold[R](...)`, `class Result[A]`, `type Library = ...`), not `TypeVar`
+   or `Generic`. Use a `Protocol` for an interface such as `Ops` or `Backend`.
+8. **Keep it simple.** Inline a one-line helper that has one caller. Do not add a parameter that no caller sets.
    Delete dead code.
-8. **Few tests: one golden run and laws.** `validation/test_readme.py` runs the README on every installed backend.
+9. **Few tests: one golden run and laws.** `validation/test_readme.py` runs the README on every installed backend.
    Every other test states one law, such as range preservation or De Morgan, or guards one bug that nothing else
    would catch. Loop over the cases and the backends inside the test, not with `parametrize`, and name the case in
    the assert message. Do not test what the types prove or what another test checks.
-9. **Docstrings give the contract; comments say why.** Put a docstring on every public module, class, function,
-   field and type alias. Write a comment only for a reason that the code cannot show, such as a numerical hazard.
-   Never write history ("now", "used to", "moved from") in either.
+10. **Docstrings give the contract; comments say why.** Put a docstring on every public module, class, function,
+    field and type alias. Write a comment only for a reason that the code cannot show, such as a numerical hazard.
+    Never write history ("now", "used to", "moved from") in either.
 
 ## Writing
 

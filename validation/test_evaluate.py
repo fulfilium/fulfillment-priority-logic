@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 from conftest import BACKENDS, array, to_numpy
 
-from fulfillment_priority_logic import And, Offset, Or, Var, evaluate, math
+from fulfillment_priority_logic import And, Offset, Or, Var, evaluate, fold, math, rename, replace, transform
 
 a, b, c, d = Var("a"), Var("b"), Var("c"), Var("d")
 SPEC = And(
@@ -101,14 +101,21 @@ def test_names_and_rewrites_never_change_a_score():
     score = to_numpy(evaluate(SPEC, values).value)
     rewrites = {
         "a name": SPEC.named("whole"),
-        "a renamed input": SPEC.rename({"a": "z"}),
-        "the identity rewrite": SPEC.transform(lambda n: n),
-        "a part replaced by itself": SPEC.replace(c, c),
+        "a renamed input": rename(SPEC, {"a": "z"}),
+        "the identity rewrite": transform(SPEC, lambda n: n),
+        "a part replaced by itself": replace(SPEC, c, c),
     }
     for case, formula in rewrites.items():
         renamed = {("z" if k == "a" and case == "a renamed input" else k): v for k, v in values.items()}
         assert np.array_equal(to_numpy(evaluate(formula, renamed).value), score), case
-    assert SPEC.transform(lambda n: n) == SPEC and hash(SPEC.transform(lambda n: n)) == hash(SPEC)
+    assert transform(SPEC, lambda n: n) == SPEC and hash(transform(SPEC, lambda n: n)) == hash(SPEC)
+
+
+def test_fold_visits_a_shared_part_once():
+    shared = a & b
+    visited: list[object] = []
+    fold(Or(shared, ~shared, shared.offset(0.1)), lambda node, below: visited.append(node))
+    assert visited.count(shared) == 1 and len(visited) == len(set(visited)), visited
 
 
 def test_plain_numbers_follow_the_arrays():

@@ -1,6 +1,6 @@
 """The jax backend. It also makes `Result` a pytree, so that a jitted function can return one."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import jax
@@ -9,11 +9,16 @@ import numpy as np
 from jax.core import Tracer
 
 from ..evaluate import Result
+from ..ops import ArrayOps
 
 
 def inputs(values: Sequence[Any]) -> list[jax.Array]:
     arrays = [jnp.asarray(v) for v in values]
     return [a if jnp.issubdtype(a.dtype, jnp.floating) else a.astype(float) for a in arrays]
+
+
+def ops(given: Mapping[str, Any]) -> ArrayOps:
+    return ArrayOps(jnp, given, stack)
 
 
 def stack(xs: Sequence[Any]) -> jax.Array:

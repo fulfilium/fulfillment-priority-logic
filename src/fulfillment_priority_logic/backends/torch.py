@@ -1,11 +1,13 @@
 """The torch backend. Plain numbers and numpy inputs go to the device and float type of the tensors given."""
 
 import functools
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 import torch
+
+from ..ops import ArrayOps
 
 _NUMPY_DTYPES = (torch.float16, torch.float32, torch.float64)
 
@@ -16,6 +18,10 @@ def inputs(values: Sequence[Any]) -> list[torch.Tensor]:
     device = tensors[0].device if tensors else None
     out = [v if isinstance(v, torch.Tensor) else torch.as_tensor(v, dtype=dtype, device=device) for v in values]
     return [t if t.is_floating_point() else t.to(dtype or torch.get_default_dtype()) for t in out]
+
+
+def ops(given: Mapping[str, Any]) -> ArrayOps:
+    return ArrayOps(torch, given, stack)
 
 
 def stack(xs: Sequence[Any]) -> torch.Tensor:

@@ -1,5 +1,9 @@
 """The warp backend: the operators as Warp kernels on Warp arrays. It computes values only, no gradients.
 
+It runs every node that computes only with the methods of `Ops`, which covers the package's nodes and every
+derived node. A node that does its own array arithmetic is promised on numpy, torch and jax only: on Warp, `ops.xp`
+raises, and arithmetic on Warp arrays raises Warp's own error.
+
 The kernels run on the device of the input arrays, and plain numbers and numpy inputs go to that device in the
 float type of those arrays. Limit: a batch can be broadcast only against single values, not (3, 1) against
 (1, 4), and a single value comes back with shape (1,), because Warp has no 0-d arrays.
@@ -7,13 +11,14 @@ float type of those arrays. Limit: a batch can be broadcast only against single 
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any, assert_never
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import warp as wp
 
 from .. import warp_funcs as wf
-from ..nodes import And, Formula, Not, Offset, Or, Piecewise, Power, Var
+from ..math import DEFAULT_SLACK
 
 
 def inputs(values: Sequence[Any]) -> list[Any]:
@@ -40,31 +45,51 @@ def value_range(x: Any) -> tuple[float, float] | None:
     return (float(a.min()), float(a.max())) if a.size else None
 
 
-def apply(node: Formula, args: Sequence[Any], inputs: Mapping[str, Any]) -> Any:
-    """The value of one node from the values of its children."""
-    match node:
-        case Var(name=name):
-            return inputs[name]
-        case And(p=p, slack=slack):
-            rows, batch = _columns(args)
-            return _reduce_rows(rows, p, slack, 0).reshape(batch)
-        case Or(p=p, slack=slack):
-            rows, batch = _columns(args)
-            return _map(_negate, _reduce_rows(rows, p, slack, 1).reshape(batch))
-        case Not():
-            return _map(_negate, args[0])
-        case Offset(delta=delta):
-            return _map(_offset, args[0], args[0].dtype(delta))  # values only, so pass_gradient changes nothing
-        case Power(w=w):
-            return _map(_power, args[0], args[0].dtype(w))
-        case Piecewise(points=points):
-            x = args[0]
-            landmarks = [
-                wp.array(np.array(v, dtype=_numpy_dtype(x.dtype)), device=x.device) for v in zip(*points, strict=True)
-            ]
-            return _map(_piecewise, x, *landmarks)
-        case _:
-            assert_never(node)
+@dataclass(frozen=True)
+class WarpOps:
+    """The `Ops` of Warp: each method launches a kernel. Warp has no array namespace, so `xp` raises."""
+
+    inputs: Mapping[str, Any]
+    """The inputs of this evaluation, as Warp arrays."""
+
+    @property
+    def xp(self) -> Any:
+        raise TypeError(
+            "Warp has no array namespace, so a node that computes with ops.xp has no Warp kernel. "
+            "Use numpy, torch or jax, or write the node as a derived node with expand()."
+        )
+
+    def input(self, name: str) -> Any:
+        return self.inputs[name]
+
+    def p_mean(self, values: Sequence[Any], p: float, slack: float = DEFAULT_SLACK) -> Any:
+        rows, batch = _columns(values)
+        return _reduce_rows(rows, p, slack, 0).reshape(batch)
+
+    def dual_p_mean(self, values: Sequence[Any], p: float, slack: float = DEFAULT_SLACK) -> Any:
+        rows, batch = _columns(values)
+        return self.negate(_reduce_rows(rows, p, slack, 1).reshape(batch))
+
+    def offset(self, x: Any, delta: float, *, pass_gradient: bool = False) -> Any:
+        return _map(_offset, x, x.dtype(delta))  # values only, so pass_gradient changes nothing here
+
+    def piecewise(self, x: Any, points: Sequence[tuple[float, float]]) -> Any:
+        dtype = _numpy_dtype(x.dtype)
+        xs, ys = (wp.array(np.array(v, dtype=dtype), device=x.device) for v in zip(*points, strict=True))
+        return _map(_piecewise, x, xs, ys)
+
+    def power(self, x: Any, w: float) -> Any:
+        return _map(_power, x, x.dtype(w))
+
+    def negate(self, x: Any) -> Any:
+        return _map(_negate, x)
+
+    def stop_gradient(self, x: Any) -> Any:
+        return x
+
+
+def ops(given: Mapping[str, Any]) -> WarpOps:
+    return WarpOps(given)
 
 
 @wp.kernel
