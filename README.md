@@ -91,7 +91,7 @@ Formulas are frozen dataclasses, so they compare and hash by structure and work 
    usually sits in between (p = 0 or -1). No single value of `p` is right for every problem.
 
 4. **Say what matters less with the right tool.** The three tools are not interchangeable. Use priority
-   (`.offset`) when a requirement can wait, so that the others can improve while it is still 0. A power cannot do
+   (`Offset`) when a requirement can wait, so that the others can improve while it is still 0. A power cannot do
    this, because `0 ** 0.5` is still 0 and still sends a strict "and" to 0. Use importance (`**`) when a value
    means too much or too little: `quiet ** 2` reads a fan at 0.8 as 0.64. An offset cannot do this, because it
    moves the floor, so `[quiet]₀.₅` reports a fan at full blast as half satisfied. Leave the slack small. It
