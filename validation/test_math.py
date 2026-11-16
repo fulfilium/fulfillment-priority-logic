@@ -148,6 +148,25 @@ def test_piecewise_slope_at_a_landmark_is_the_one_on_its_right():
         assert np.allclose(np.asarray(grad), expected), f"jax: {grad}"
 
 
+def test_the_gradient_of_a_near_zero_input_keeps_its_digits():
+    """A bug guard: in float32 at p = 1, the input at 5e-7 got a slope of 0.2459 where the mean's is 0.25, because
+    the autodiff of expm1 adds 1 back to a value near -1."""
+    x = np.array([5e-7, 0.3, 0.5, 0.9], np.float32)
+    grads = {}
+    if "torch" in BACKENDS:
+        import torch
+
+        t = torch.tensor(x, requires_grad=True)
+        math.p_mean(t, 1.0).backward()
+        grads["torch"] = None if t.grad is None else t.grad.numpy()
+    if "jax" in BACKENDS:
+        import jax
+
+        grads["jax"] = np.asarray(jax.grad(lambda v: math.p_mean(v, 1.0))(jax.numpy.asarray(x)))
+    for backend, g in grads.items():
+        assert g is not None and np.allclose(g, 0.25, rtol=1e-5), f"{backend}: {g}"
+
+
 def test_a_nan_measurement_is_never_a_score():
     """A bug guard: NaN went through the landmark comparisons and came out as the first landmark's value."""
     spec = Var("d").piecewise((0, 1), (10, 0.1), (60, 0))

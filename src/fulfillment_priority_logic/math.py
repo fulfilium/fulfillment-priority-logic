@@ -86,7 +86,12 @@ def p_mean(x: Any, p: float, slack: float = DEFAULT_SLACK, axis: Axis = None) ->
                 # s is 0 only when ε = 0 and the min (p < 0) or every input (p > 0) is 0. The mean is 0 then.
                 positive = s > 0
                 safe = xp.where(positive, s, 1.0)
-                t = _reduce(lib, "mean", xp.expm1(p * xp.log(shifted / safe)), axes)
+                u = p * xp.log(shifted / safe)
+                # torch and jax differentiate expm1(u) as expm1(u) + 1, which cancels to a few digits when exp(u)
+                # is tiny (an input near 0 under p > 0). The value stays expm1's; the gradient is exp(u)'s.
+                e = xp.exp(u)
+                term = _stop_gradient(lib, xp.expm1(u)) + (e - _stop_gradient(lib, e))
+                t = _reduce(lib, "mean", term, axes)
                 m = xp.where(positive, safe * xp.exp(xp.log1p(t) / p), 0.0)
             y = m - slack
             # The forward value is exactly the clipped one, because `y - sg(y)` is exactly 0. The gradient is y's.
