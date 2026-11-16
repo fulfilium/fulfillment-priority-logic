@@ -5,13 +5,13 @@ from typing import Any
 import numpy as np
 from conftest import BACKENDS, array, to_numpy
 
-from fulfillment_priority_logic import And, Offset, Or, Var, evaluate, fold, math, rename, replace, transform
+from fulfillment_priority_logic import And, Offset, Or, Piecewise, Var, evaluate, fold, math, rename, replace, transform
 
 a, b, c, d = Var("a"), Var("b"), Var("c"), Var("d")
 SPEC = And(
-    Or(a, b.offset(0.3), p=-2).named("either"),
+    Or(a, Offset(b, 0.3), p=-2, name="either"),
     ~(c**1.5),
-    d.piecewise((0, 0), (1, 0.1), (3, 1)) & a.offset(-0.2, pass_gradient=True),
+    Piecewise(d, ((0, 0), (1, 0.1), (3, 1))) & Offset(a, -0.2, pass_gradient=True),
     p=-1,
 )
 
@@ -57,7 +57,7 @@ def test_gradients_match_finite_differences():
     Two more laws hold for the gradient of the mean itself. An input at 0 with p < 0 gets a finite, positive gradient,
     which is what the slack is for. Equal inputs each get 1/n, because the final clip passes the gradient through.
     """
-    spec = And(Or(a, b.offset(0.3), p=-2), ~(c**1.5), d.piecewise((0, 0), (1, 0.1), (3, 1)), p=-1)
+    spec = And(Or(a, Offset(b, 0.3), p=-2), ~(c**1.5), Piecewise(d, ((0, 0), (1, 0.1), (3, 1))), p=-1)
     point = np.array([0.3, 0.6, 0.2, 1.7])  # d away from the landmarks, where the slope jumps
 
     def score(x: np.ndarray) -> float:
@@ -65,7 +65,7 @@ def test_gradients_match_finite_differences():
 
     h = 1e-6
     expected = np.array([(score(point + h * e) - score(point - h * e)) / (2 * h) for e in np.eye(4)])
-    passed = And(a.offset(-0.6, pass_gradient=True), b, p=-1)
+    passed = And(Offset(a, -0.6, pass_gradient=True), b, p=-1)
     for backend in [name for name in BACKENDS if name in ("torch", "jax")]:
         if backend == "torch":
             import torch
@@ -109,12 +109,13 @@ def test_names_and_rewrites_never_change_a_score():
         renamed = {("z" if k == "a" and case == "a renamed input" else k): v for k, v in values.items()}
         assert np.array_equal(to_numpy(evaluate(formula, renamed).value), score), case
     assert transform(SPEC, lambda n: n) == SPEC and hash(transform(SPEC, lambda n: n)) == hash(SPEC)
+    assert Offset(a, 0.3, name="later") == Offset(a, 0.3).named("later"), "a name given to the class or by .named"
 
 
 def test_fold_visits_a_shared_part_once():
     shared = a & b
     visited: list[object] = []
-    fold(Or(shared, ~shared, shared.offset(0.1)), lambda node, below: visited.append(node))
+    fold(Or(shared, ~shared, Offset(shared, 0.1)), lambda node, below: visited.append(node))
     assert visited.count(shared) == 1 and len(visited) == len(set(visited)), visited
 
 

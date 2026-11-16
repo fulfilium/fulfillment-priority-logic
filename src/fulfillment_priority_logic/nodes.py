@@ -10,7 +10,7 @@ that you add is written the same way.
 walks the formula top-down and shows the folded values. (For readers who know the term: the fields that hold
 formulas make each node a functor, and `fold` is its catamorphism.)
 
->>> And(Var("upright"), Var("near").offset(0.5), p=-1)
+>>> And(Var("upright"), Offset(Var("near"), 0.5), p=-1)
 upright ∧₋₁ [near]₀.₅
 """
 
@@ -31,8 +31,9 @@ if TYPE_CHECKING:
 class Formula:
     """The base of every node. It gives the operators `&`, `|`, `~` and `**`, and the defaults below."""
 
-    name: str | None = field(default=None, init=False, kw_only=True)
-    """A name for this part, which printouts show and `result["name"]` reads. Set it with `.named(...)`."""
+    name: str | None = field(default=None, kw_only=True)
+    """A name for this part, which printouts show and `result["name"]` reads. Every node takes it as `name=...`;
+    `.named(...)` names a formula built with an operator."""
 
     measurements: ClassVar[tuple[str, ...]] = ()
     """The fields whose formulas are raw measurements, not fulfillments, so `evaluate` does not hold them to
@@ -69,26 +70,18 @@ class Formula:
         """`a ** w` changes how demanding a requirement is without changing its range. See `Power`."""
         return Power(self, w)
 
-    def importance(self, w: float, *, pass_gradient: bool = False) -> Power:
-        """`a ** w`, with the option to pass a gradient of 1 through it. See `Power`."""
-        return Power(self, w, pass_gradient=pass_gradient)
-
-    def offset(self, delta: float, *, pass_gradient: bool = False) -> Offset:
-        """The priority offset `[a]_δ`, which lowers the priority of `a` when δ > 0. See `Offset`."""
-        return Offset(self, delta, pass_gradient=pass_gradient)
-
-    def piecewise(self, *points: tuple[float, float]) -> Piecewise:
-        """A measurement mapped to a fulfillment through landmarks `(measurement, fulfillment)`. See `Piecewise`."""
-        return Piecewise(self, points)
+    def check_naming(self) -> None:
+        """Refuse a name that is not an identifier, or that two different parts below this node share. Every node
+        runs it when it is built. A family of nodes with its own rule for names overrides it."""
+        if self.name is not None:
+            check_name(self.name)
+            check_names(self)
 
     def named(self, name: str) -> Self:
-        """The same formula with a name, which printouts show and `result["name"]` reads."""
+        """The same formula with a name: `(a & b).named("both")`. A node built by its class takes `name=` instead."""
         if isinstance(self, Var):
             raise TypeError(f"a Var is already named by the input it reads ({self.name!r}); name the formulas above it")
-        check_name(name)
-        named = _copy(self, {"name": name})
-        check_names(named)
-        return named
+        return _copy(self, {"name": name})
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         # This runs before @dataclass. Setting __repr__ keeps the decorator from writing its own, and the generated
@@ -110,6 +103,7 @@ class Formula:
             if own is not None:
                 own(self)
             _check_fields(self)
+            self.check_naming()
 
         cls.__post_init__ = __post_init__  # type: ignore[attr-defined]
 
@@ -157,7 +151,7 @@ def fold[R](root: Formula, step: Callable[[Formula, tuple[R, ...]], R]) -> R:
 
     A part that appears twice is folded once, so `step` should depend only on its arguments.
 
-    >>> fold(Var("a").offset(0.1), lambda node, below: 1 + max(below, default=0))  # the depth
+    >>> fold(Offset(Var("a"), 0.1), lambda node, below: 1 + max(below, default=0))  # the depth
     2
     """
     return fold_all(root, step, {})[root]
@@ -244,7 +238,7 @@ def atom(text: str) -> str:
 
 @dataclass(frozen=True)
 class Var(Formula):
-    """An input: a fulfillment in [0, 1], or a raw measurement when it is read through `.piecewise(...)`."""
+    """An input: a fulfillment in [0, 1], or a raw measurement when a `Piecewise` reads it."""
 
     name: str  # type: ignore[assignment]
     """The key of this input in the values given to `evaluate`."""
@@ -271,11 +265,13 @@ class _Mean(Formula):
     symbol: ClassVar[str] = ""
     dual: ClassVar[bool] = False
 
-    def __init__(self, *operands: Formula, p: float = 0.0, slack: float = math.DEFAULT_SLACK) -> None:
+    def __init__(
+        self, *operands: Formula, p: float = 0.0, slack: float = math.DEFAULT_SLACK, name: str | None = None
+    ) -> None:
         object.__setattr__(self, "operands", operands)
         object.__setattr__(self, "p", p)
         object.__setattr__(self, "slack", slack)
-        object.__setattr__(self, "name", None)
+        object.__setattr__(self, "name", name)
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -335,7 +331,7 @@ class Not(Formula):
 
 @dataclass(frozen=True)
 class Offset(Formula):
-    """The priority offset `[a]_δ = a·(1 − |δ|) + max(δ, 0)`. Write it `a.offset(δ)`.
+    """The priority offset `[a]_δ = a·(1 − |δ|) + max(δ, 0)`. Write it `Offset(a, δ)`.
 
     With δ > 0 the value is squeezed into [δ, 1], so a term at 0 no longer drags an `And` to 0, and the other
     terms can still be improved while this one is unmet: its priority is lower. With δ < 0 the value is squeezed
@@ -371,7 +367,7 @@ class Power(Formula):
 
     0 stays 0 and 1 stays 1, but the values between move: w > 1 makes the requirement more demanding
     (0.8 ** 2 = 0.64), and w < 1 makes it more lenient. Its gradient is the true slope, kept finite at 0 by the
-    slack (see `math.power`); `a.importance(w, pass_gradient=True)` passes a gradient of 1 instead.
+    slack (see `math.power`); `Power(a, w, pass_gradient=True)` passes a gradient of 1 instead.
     """
 
     operand: Formula
@@ -398,12 +394,13 @@ class Power(Formula):
 
 @dataclass(frozen=True)
 class Piecewise(Formula):
-    """A measurement turned into a fulfillment by straight lines between landmarks. Write it `x.piecewise(...)`.
+    """A measurement turned into a fulfillment by straight lines between landmarks. Write it
+    `Piecewise(x, points)`.
 
     For example, a delivery that is 0 minutes late is perfect, 10 minutes late is barely acceptable, and an hour
     late is worthless:
 
-    >>> Var("minutes_late").piecewise((0, 1), (10, 0.1), (60, 0))
+    >>> Piecewise(Var("minutes_late"), ((0, 1), (10, 0.1), (60, 0)))
     piecewise(minutes_late; 0→1, 10→0.1, 60→0)
     """
 

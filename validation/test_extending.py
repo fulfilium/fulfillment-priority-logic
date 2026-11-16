@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from conftest import BACKENDS, array, to_numpy
 
-from fulfillment_priority_logic import And, Formula, Ops, Var, evaluate
+from fulfillment_priority_logic import And, Formula, Offset, Ops, Piecewise, Var, evaluate
 from fulfillment_priority_logic.nodes import subscript
 
 
@@ -38,7 +38,7 @@ X = np.random.default_rng(0).random((3, 16))
 
 
 def test_a_derived_node_has_the_value_of_its_expansion_on_every_backend():
-    forall = Forall((a, b.offset(0.2), ~c))
+    forall = Forall((a, Offset(b, 0.2), ~c))
     assert repr(forall) == "∀₋₄(a, [b]₀.₂, ¬c)"
     for backend in BACKENDS:
         values = {k: array(backend, x) for k, x in zip("abc", X, strict=True)}
@@ -81,13 +81,13 @@ class Close(Formula):
     distance: Formula
 
     def expand(self) -> Formula:
-        return self.distance.piecewise((0, 1), (1, 0.1), (5, 0)) & Var("visible")
+        return Piecewise(self.distance, ((0, 1), (1, 0.1), (5, 0))) & Var("visible")
 
 
 def test_an_expansion_may_read_new_inputs_and_measurements():
     """A derived node is analysed after its expansion: the input that only the expansion reads is required, and a
     measurement that only the expansion calibrates is not held to [0, 1]."""
-    close = Close(Var("d")).named("close")
+    close = Close(Var("d"), name="close")
     for backend in BACKENDS:
         values = {"d": array(backend, [0.5, 3.0]), "visible": array(backend, [1.0, 0.5])}
         derived = to_numpy(evaluate(close, values)["close"])

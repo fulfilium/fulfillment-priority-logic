@@ -16,7 +16,10 @@ Never skip, loosen or delete a test to make it pass. Find the cause.
 
 1. **The kinds of node are an open set.** A node is a frozen dataclass that subclasses `Formula` and defines
    `notation`, and either `compute` or `expand`. The package's own nodes (`Var`, `And`, ..., `Piecewise`) are
-   written the same way, and no other code names them, except `Var` for the inputs. Do not add a `match` over
+   written the same way, and no other code names them, except `Var` for the inputs. A node is built by its class,
+   and every class takes `name=`. `Formula` gives the paper's operators (`&`, `|`, `~`, `**`) and `.named`, and no
+   method that builds one kind of node (no `.offset(...)`): a method cannot be given to a node added later, so
+   it would make the package's nodes read differently from everyone else's. Do not add a `match` over
    kinds of node; add a method to the nodes, or a fold.
 2. **An interpretation is a fold.** Evaluation, the one-line text, `transform` and `rename` are folds over
    `children`, as `fold_all` in `evaluate` and `formula_text` show; the tree view walks top-down over folded

@@ -63,7 +63,7 @@ def evaluate(
     name it, and plain numbers go to the device and float type of the arrays.
 
     With `check=True` every input must be free of NaN, and an input that is read as a fulfillment must lie in
-    [0, 1]. An input is a measurement instead when it is read through `.piecewise(...)`, or through any field that
+    [0, 1]. An input is a measurement instead when a `Piecewise` reads it, or through any field that
     a node names in its `measurements`. The check reads the smallest and largest value back from the device. It is
     skipped where values cannot be read: inside `jax.jit`, `jax.vmap` or `jax.grad`, and inside `torch.func`
     transforms. Set `check=False` to skip it everywhere, for example in a training loop on a GPU.
@@ -206,5 +206,5 @@ def _check_range(name: str, bounds: tuple[float, float] | None, fulfillment: boo
     if fulfillment and (lo < 0.0 or hi > 1.0):
         raise ValueError(
             f"input {name!r} is not a fulfillment: its values range over [{lo:g}, {hi:g}], outside [0, 1]. "
-            f"If it is a measurement, map it into [0, 1] with Var({name!r}).piecewise(...)."
+            f"If it is a measurement, map it into [0, 1] with Piecewise(Var({name!r}), points)."
         )

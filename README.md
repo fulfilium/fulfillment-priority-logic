@@ -15,11 +15,11 @@ numpy, and also on PyTorch, JAX and Warp.
 A thermostat should keep a room warm. It should also be cheap to run and quiet, but those matter less than warmth.
 
 ```python
-from fulfillment_priority_logic import And, Var, evaluate
+from fulfillment_priority_logic import And, Offset, Piecewise, Var, evaluate
 
-warm = Var("temperature").piecewise((14, 0), (18, 0.1), (21, 1)).named("warm")
-cheap = Var("kwh").piecewise((10, 0), (6, 0.1), (2, 1)).named("cheap")
-spec = And(warm, (cheap & Var("quiet")).offset(0.3), p=-2)
+warm = Piecewise(Var("temperature"), ((14, 0), (18, 0.1), (21, 1)), name="warm")
+cheap = Piecewise(Var("kwh"), ((10, 0), (6, 0.1), (2, 1)), name="cheap")
+spec = And(warm, Offset(cheap & Var("quiet"), 0.3), p=-2)
 
 print(spec)
 print(evaluate(spec, {"temperature": 19.5, "kwh": 5.0, "quiet": 0.8}))
@@ -52,12 +52,14 @@ a batch of cases, and then the formula is computed for every case at once.
 | and | `And(a, b, p=-1)`, or `a & b` for p = 0 | `a ∧₋₁ b` | High only when all parts are high. `p` sets how strict the "and" is: at p = -∞ the worst part decides, at 0 it is the geometric mean, at 1 the average. |
 | or | `Or(a, b, p=-1)`, or `a \| b` for p = 0 | `a ∨₋₁ b` | High when any part is high. It is `1 − And(1 − a, 1 − b)`. |
 | not | `~a` | `¬a` | `1 − a`. |
-| priority | `a.offset(0.3)` | `[a]₀.₃` | Lowers the priority of `a`. With δ > 0 it squeezes `a` into [δ, 1], so the other parts can still improve the score while `a` is 0. With δ < 0 it squeezes `a` into [0, 1 − \|δ\|]. δ is in [−1, 1]. |
+| priority | `Offset(a, 0.3)` | `[a]₀.₃` | Lowers the priority of `a`. With δ > 0 it squeezes `a` into [δ, 1], so the other parts can still improve the score while `a` is 0. With δ < 0 it squeezes `a` into [0, 1 − \|δ\|]. δ is in [−1, 1]. |
 | importance | `a ** 2` | `a²` | Makes `a` more demanding (w > 1) or more lenient (w < 1). 0 and 1 stay where they are. |
-| calibration | `Var("kwh").piecewise((10, 0), (6, 0.1), (2, 1))` | `piecewise(kwh; 2→1, 6→0.1, 10→0)` | Turns a measurement into a fulfillment, with straight lines between landmarks. |
+| calibration | `Piecewise(Var("kwh"), ((10, 0), (6, 0.1), (2, 1)))` | `piecewise(kwh; 2→1, 6→0.1, 10→0)` | Turns a measurement into a fulfillment, with straight lines between landmarks. |
 | slack | `And(a, b, p=-1, slack=1e-3)` | `a ∧₋₁,ε=0.001 b` | A small number ε added before the mean and removed after. It keeps a single 0 from making gradients infinite. The default is 1e-7, which is not printed. |
 
-Name any part with `.named("cheap")`. A named part prints as its name in the formula, and the tree shows what is
+Every node is a class, and every class takes a name: `Offset(a, 0.3, name="later")`. The operators `&`, `|`, `~`
+and `**` are short forms of `And`, `Or`, `Not` and `Power` with their defaults; name what they build with
+`(a & b).named("both")`. A named part prints as its name in the formula, and the tree shows what is
 inside it. Names are Python identifiers, optionally joined by dots.
 
 `a & b` and `a | b` are binary, as in the paper's grammar, so `a & b & c` means `(a & b) & c`. The power mean is
@@ -80,7 +82,7 @@ Formulas are frozen dataclasses, so they compare and hash by structure and work 
    "just acceptable":
 
    ```python
-   cheap = Var("kwh").piecewise((10, 0), (6, 0.1), (2, 1))
+   cheap = Piecewise(Var("kwh"), ((10, 0), (6, 0.1), (2, 1)))
    print(round(float(evaluate(cheap, {"kwh": 5.0}).value), 3))  # 0.325
    ```
 
@@ -237,12 +239,12 @@ give different values for every δ ≠ 0: for δ > 0 the paper's floor is δ/(1 
 same family, though: δ = δ_paper / (1 + δ_paper) here gives exactly the paper's values. For δ < 0 the paper's form
 goes above 1, while this one stays in [0, 1] for every δ in [−1, 1].
 
-The offset's gradient is 1 − |δ|. `a.offset(δ, pass_gradient=True)`, printed `[a]_δ↑`, keeps the value but passes a
+The offset's gradient is 1 − |δ|. `Offset(a, δ, pass_gradient=True)`, printed `[a]_δ↑`, keeps the value but passes a
 gradient of 1, so the offset moves the value without weakening its pull. It is a training device and not part of
 what the formula means.
 
 The power's gradient is its true slope `w·a^(w−1)`, kept finite at 0 for w < 1 by the same slack ε as the mean.
-`a.importance(w, pass_gradient=True)`, printed `a^w↑`, keeps the value but passes a gradient of 1, so the power
+`Power(a, w, pass_gradient=True)`, printed `a^w↑`, keeps the value but passes a gradient of 1, so the power
 changes what a value means without changing its pull.
 
 ## Citation

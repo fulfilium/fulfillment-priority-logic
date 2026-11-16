@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from conftest import BACKENDS, array, mean_of, to_numpy
 
-from fulfillment_priority_logic import And, Or, Var, evaluate, math, min_fulfillment
+from fulfillment_priority_logic import And, Offset, Or, Piecewise, Var, evaluate, math, min_fulfillment
 
 INF = float("inf")
 PS = [-INF, -60.0, -8.0, -1.0, -0.3, 0.0, 0.5, 1.0, 2.0, 8.0, 60.0, INF]
@@ -86,10 +86,10 @@ def test_offset_range_and_negation():
     for backend in BACKENDS:
         values = {"a": array(backend, x)}
         for delta in (-1.0, -0.35, 0.0, 0.2, 1.0):
-            got = to_numpy(evaluate(a.offset(delta), values).value)
+            got = to_numpy(evaluate(Offset(a, delta), values).value)
             assert np.abs(got - (x * (1 - abs(delta)) + max(delta, 0))).max() < 1e-12, f"{backend}, δ = {delta}"
             assert got.min() >= max(delta, 0) - 1e-12 and got.max() <= 1 - max(-delta, 0) + 1e-12, f"{backend}"
-            flipped = to_numpy(evaluate((~a).offset(-delta), values).value)
+            flipped = to_numpy(evaluate(Offset(~a, -delta), values).value)
             assert np.abs((1 - got) - flipped).max() < 1e-12, f"{backend}, δ = {delta}: ¬[a]_δ != [¬a]_-δ"
 
 
@@ -195,7 +195,7 @@ def test_the_gradient_of_a_near_zero_input_keeps_its_digits():
 
 def test_a_nan_measurement_is_never_a_score():
     """A bug guard: NaN went through the landmark comparisons and came out as the first landmark's value."""
-    spec = Var("d").piecewise((0, 1), (10, 0.1), (60, 0))
+    spec = Piecewise(Var("d"), ((0, 1), (10, 0.1), (60, 0)))
     for backend in BACKENDS:
         got = to_numpy(evaluate(spec, {"d": array(backend, [np.nan, 5.0])}, check=False).value)
         assert np.isnan(got[0]) and not np.isnan(got[1]), f"{backend}: {got}"
