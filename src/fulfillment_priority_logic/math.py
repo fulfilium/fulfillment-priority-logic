@@ -100,6 +100,28 @@ def p_mean(x: Any, p: float, slack: float = DEFAULT_SLACK, axis: Axis = None) ->
     return xp.squeeze(y, dim=axes) if lib == "torch" else xp.squeeze(y, axis=axes)
 
 
+def power(x: Any, w: float, slack: float = DEFAULT_SLACK, *, pass_gradient: bool = False) -> Any:
+    """Importance `x ** w`, for w > 0: 0 stays 0 and 1 stays 1.
+
+    The value is exactly `x ** w`. Its gradient is the slope of `(x + ε) ** w`, which is the true slope
+    `w·x^(w−1)` except within about ε of 0, where for w < 1 the true slope is infinite and this one stays finite,
+    as the slack keeps the mean's. With `pass_gradient=True` the value is the same but the gradient is 1, so the
+    power changes what the value means without changing its pull. That is a training device, not part of what
+    importance means.
+
+    >>> round(float(power(0.5, 2)), 3)
+    0.25
+    """
+    if not 0.0 < w < INF:
+        raise ValueError(f"the power w must be a finite number > 0, got {w}")
+    lib = library(x)
+    x = _asarray(lib, x)
+    y = x**w
+    # The forward value is exactly y, because `g - stop_gradient(g)` is exactly 0; the gradient is g's.
+    g = x if pass_gradient else (x + slack) ** w
+    return _stop_gradient(lib, y) + (g - _stop_gradient(lib, g))
+
+
 def dual_p_mean(x: Any, p: float, slack: float = DEFAULT_SLACK, axis: Axis = None) -> Any:
     """The "or" of FPL, `1 − p_mean(1 − x)` by De Morgan's law. It is high when any input is high.
 

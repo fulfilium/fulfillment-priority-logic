@@ -105,6 +105,32 @@ def test_powers_compose():
             assert np.abs(twice - once).max() < 1e-12, f"{backend}, w = {w1}, {w2}"
 
 
+def test_the_power_gradient_is_its_slope_finite_at_zero_or_one_when_passed():
+    """The slope of x ** w is w·x^(w−1) away from 0, finite at 0 for w < 1, and 1 with pass_gradient."""
+    x = np.array([0.0, 1e-3, 0.3, 0.7, 1.0])
+    true = 0.25 * x[1:] ** -0.75
+    grads = {}
+    if "torch" in BACKENDS:
+        import torch
+
+        for passed in (False, True):
+            t = torch.tensor(x, requires_grad=True)
+            math.power(t, 0.25, pass_gradient=passed).sum().backward()
+            grads["torch", passed] = None if t.grad is None else t.grad.numpy()
+    if "jax" in BACKENDS:
+        import jax
+
+        for passed in (False, True):
+            f = lambda v, passed=passed: math.power(v, 0.25, pass_gradient=passed).sum()  # noqa: E731
+            grads["jax", passed] = np.asarray(jax.grad(f)(jax.numpy.asarray(x)))
+    for (backend, passed), g in grads.items():
+        assert g is not None and np.isfinite(g).all(), f"{backend}, passed = {passed}: {g}"
+        if passed:
+            assert np.allclose(g, 1.0), f"{backend}: {g}"
+        else:
+            assert np.allclose(g[1:], true, rtol=1e-3), f"{backend}: {g[1:]} != {true}"
+
+
 def test_min_fulfillment_bounds_every_input():
     """Theorem IV.1: no input is below the bound that its mean certifies, and the bound is reached."""
     rng = np.random.default_rng(1)

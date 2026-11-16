@@ -78,8 +78,8 @@ class WarpOps:
         xs, ys = (wp.array(np.array(v, dtype=dtype), device=x.device) for v in zip(*points, strict=True))
         return _map(_piecewise, x, xs, ys)
 
-    def power(self, x: Any, w: float) -> Any:
-        return _map(_power, x, x.dtype(w))
+    def power(self, x: Any, w: float, *, pass_gradient: bool = False) -> Any:
+        return _map(_power, x, x.dtype(w))  # values only, so pass_gradient changes nothing here
 
     def negate(self, x: Any) -> Any:
         return _map(_negate, x)

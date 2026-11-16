@@ -69,6 +69,10 @@ class Formula:
         """`a ** w` changes how demanding a requirement is without changing its range. See `Power`."""
         return Power(self, w)
 
+    def importance(self, w: float, *, pass_gradient: bool = False) -> Power:
+        """`a ** w`, with the option to pass a gradient of 1 through it. See `Power`."""
+        return Power(self, w, pass_gradient=pass_gradient)
+
     def offset(self, delta: float, *, pass_gradient: bool = False) -> Offset:
         """The priority offset `[a]_δ`, which lowers the priority of `a` when δ > 0. See `Offset`."""
         return Offset(self, delta, pass_gradient=pass_gradient)
@@ -366,13 +370,17 @@ class Power(Formula):
     """Importance `a ** w`. Write it `a ** w`.
 
     0 stays 0 and 1 stays 1, but the values between move: w > 1 makes the requirement more demanding
-    (0.8 ** 2 = 0.64), and w < 1 makes it more lenient. For w < 1 the slope at exactly 0 is infinite.
+    (0.8 ** 2 = 0.64), and w < 1 makes it more lenient. Its gradient is the true slope, kept finite at 0 by the
+    slack (see `math.power`); `a.importance(w, pass_gradient=True)` passes a gradient of 1 instead.
     """
 
     operand: Formula
     """The formula whose importance changes."""
     w: float
     """The power, a finite number > 0."""
+    pass_gradient: bool = field(default=False, kw_only=True)
+    """If true, the gradient through the power is 1 in torch and jax, and the value is the same. It is a training
+    device, not part of what the formula means. It prints as ↑: `a²↑`."""
 
     def __post_init__(self) -> None:
         check_operands(self, self.operand)
@@ -381,10 +389,11 @@ class Power(Formula):
 
     def notation(self, *children: str) -> str:
         base = children[0] if children[0].replace(".", "_").isidentifier() else f"({children[0]})"
-        return base + (superscript(self.w) if self.w == int(self.w) else f"^{_number(self.w)}")
+        power = superscript(self.w) if self.w == int(self.w) else f"^{_number(self.w)}"
+        return base + power + ("↑" if self.pass_gradient else "")
 
     def compute(self, ops: Ops, *values: Any) -> Any:
-        return ops.power(values[0], self.w)
+        return ops.power(values[0], self.w, pass_gradient=self.pass_gradient)
 
 
 @dataclass(frozen=True)

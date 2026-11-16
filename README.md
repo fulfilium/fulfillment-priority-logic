@@ -241,6 +241,10 @@ The offset's gradient is 1 − |δ|. `a.offset(δ, pass_gradient=True)`, printed
 gradient of 1, so the offset moves the value without weakening its pull. It is a training device and not part of
 what the formula means.
 
+The power's gradient is its true slope `w·a^(w−1)`, kept finite at 0 for w < 1 by the same slack ε as the mean.
+`a.importance(w, pass_gradient=True)`, printed `a^w↑`, keeps the value but passes a gradient of 1, so the power
+changes what a value means without changing its pull.
+
 ## Citation
 
 The paper applies FPL to reinforcement learning. Its code is at

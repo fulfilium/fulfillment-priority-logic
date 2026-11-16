@@ -39,8 +39,8 @@ class Ops(Protocol):
         """See `math.piecewise`."""
         ...
 
-    def power(self, x: Any, w: float) -> Any:
-        """`x ** w`."""
+    def power(self, x: Any, w: float, *, pass_gradient: bool = False) -> Any:
+        """See `math.power`."""
         ...
 
     def stop_gradient(self, x: Any) -> Any:
@@ -78,8 +78,8 @@ class ArrayOps:
     def piecewise(self, x: Any, points: Sequence[tuple[float, float]]) -> Any:
         return math.piecewise(x, points)
 
-    def power(self, x: Any, w: float) -> Any:
-        return x**w
+    def power(self, x: Any, w: float, *, pass_gradient: bool = False) -> Any:
+        return math.power(x, w, pass_gradient=pass_gradient)
 
     def stop_gradient(self, x: Any) -> Any:
         return math.stop_gradient(x)
