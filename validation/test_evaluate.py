@@ -5,7 +5,20 @@ from typing import Any
 import numpy as np
 from conftest import BACKENDS, array, to_numpy
 
-from fulfillment_priority_logic import And, Offset, Or, Piecewise, Var, evaluate, fold, math, rename, replace, transform
+from fulfillment_priority_logic import (
+    And,
+    Offset,
+    Or,
+    Piecewise,
+    Var,
+    check,
+    evaluate,
+    fold,
+    math,
+    rename,
+    replace,
+    transform,
+)
 
 a, b, c, d = Var("a"), Var("b"), Var("c"), Var("d")
 SPEC = And(
@@ -172,8 +185,27 @@ def test_a_number_where_a_formula_belongs_is_explained():
         "offset of 0.5": lambda: Offset(untyped[0], 0.3),
     }.items():
         try:
-            build()
+            check(build())
         except TypeError as e:
             assert "wrap inputs in Var('name')" in str(e), f"{case}: {e}"
         else:
             raise AssertionError(f"{case}: a number or string was accepted as an operand")
+
+
+def test_check_pass_catches_invalid_formulas():
+    """The check pass validates node parameters, names, and uniqueness across the tree without __post_init__."""
+    invalid = {
+        "offset delta out of range": Offset(a, 1.5),
+        "non-positive power": a**0.0,
+        "empty And": And(),
+        "too few landmarks": Piecewise(d, ((0, 0),)),
+        "invalid name": Var("not a name"),
+        "duplicate name": And(Offset(a, 0.1, name="x"), Offset(b, 0.2, name="x")),
+    }
+    for case, formula in invalid.items():
+        try:
+            check(formula)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{case}: check() accepted an invalid formula")

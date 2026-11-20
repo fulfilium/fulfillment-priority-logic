@@ -17,7 +17,7 @@ upright ∧₋₁ [near]₀.₅
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
@@ -51,6 +51,9 @@ class Formula:
         """A formula made of other nodes that this node stands for, or None if the node defines `compute`."""
         return None
 
+    def check(self) -> None:
+        """Check this node's own parameters and operands. The `check` pass runs it on every node of a formula."""
+
     def __and__(self, other: Formula) -> And:
         """`a & b` is `And(a, b)` with p = 0. It is binary, as in the paper's grammar.
 
@@ -70,13 +73,6 @@ class Formula:
         """`a ** w` changes how demanding a requirement is without changing its range. See `Power`."""
         return Power(self, w)
 
-    def check_naming(self) -> None:
-        """Refuse a name that is not an identifier. Every node runs it when it is built; a family of nodes with its
-        own rule for names overrides it. Two parts sharing a name are found by `check`, which reads the whole tree
-        once: a check at every named node would read its subtree again each time."""
-        if self.name is not None:
-            check_name(self.name)
-
     def named(self, name: str) -> Self:
         """The same formula with a name: `(a & b).named("both")`. A node built by its class takes `name=` instead."""
         if isinstance(self, Var):
@@ -84,10 +80,7 @@ class Formula:
         return _copy(self, {"name": name})
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        # This runs before @dataclass. Setting __repr__ keeps the decorator from writing its own, and the generated
-        # __init__ calls the __post_init__ set here, which runs the node's own checks and then checks its fields.
-        # Only a class's own __post_init__ is wrapped: a subclass that defines none inherits its parent's wrapper,
-        # which already runs the checks, and wrapping it again would run them twice.
+        # This runs before @dataclass. Setting __repr__ keeps the decorator from writing its own.
         super().__init_subclass__(**kwargs)
         if cls.compute is Formula.compute and cls.expand is Formula.expand:
             raise TypeError(f"{cls.__name__} must define compute or expand")
@@ -99,18 +92,6 @@ class Formula:
             raise TypeError(f"{cls.__name__}.measurements names {unknown}, which are not fields of {cls.__name__}")
         if "__repr__" not in cls.__dict__:
             cls.__repr__ = Formula.__repr__
-        own = cls.__dict__.get("__post_init__")
-        if own is None and getattr(getattr(cls, "__post_init__", None), "checks_node", False):
-            return
-
-        def __post_init__(self: Formula) -> None:
-            if own is not None:
-                own(self)
-            _check_fields(self)
-            self.check_naming()
-
-        __post_init__.checks_node = True  # type: ignore[attr-defined]
-        cls.__post_init__ = __post_init__  # type: ignore[attr-defined]
 
     def __repr__(self) -> str:
         return formula_text(self)
@@ -192,8 +173,6 @@ def replace(root: Formula, old: Formula, new: Formula) -> Formula:
 
 def rename(root: Formula, names: Mapping[str, str]) -> Formula:
     """The formula with its inputs and named parts renamed by `names`, which maps old names to new ones."""
-    for new in names.values():
-        check_name(new)
 
     def step(node: Formula, below: tuple[Formula, ...]) -> Formula:
         changes = _child_changes(node, below)
@@ -203,9 +182,7 @@ def rename(root: Formula, names: Mapping[str, str]) -> Formula:
             changes["name"] = names[node.name]
         return _copy(node, changes) if changes else node
 
-    renamed = fold(root, step)
-    check(renamed)
-    return renamed
+    return fold(root, step)
 
 
 def formula_text(root: Formula) -> str:
@@ -215,13 +192,24 @@ def formula_text(root: Formula) -> str:
 
 
 def check(root: Formula) -> None:
-    """Refuse a name that is given to two different parts, because `result["name"]` could not tell them apart. Every
-    other rule is checked by a node when it is built; this one needs the whole tree, so `evaluate` and `rename` run
-    it once."""
-    seen: dict[str, Formula] = {}
-    for n in nodes(root):
-        if n.name is not None and seen.setdefault(n.name, n) is not n:
-            raise ValueError(f"the name {n.name!r} is used for two different parts: {seen[n.name]!r} and {n!r}")
+    """Check every node of a formula in one pass: its own invariants, its child fields, and valid unique names."""
+    seen: set[int] = set()
+    named: dict[str, Formula] = {}
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        node.check()
+        _check_fields(node)
+        if node.name is not None:
+            check_name(node.name)
+            if named.setdefault(node.name, node) != node:
+                raise ValueError(
+                    f"the name {node.name!r} is used for two different parts: {named[node.name]!r} and {node!r}"
+                )
+        stack.extend(reversed(children(node)))
 
 
 def check_operands(node: Formula, *operands: object) -> None:
@@ -259,9 +247,6 @@ class Var(Formula):
     name: str  # type: ignore[assignment]
     """The key of this input in the values given to `evaluate`."""
 
-    def __post_init__(self) -> None:
-        check_name(self.name)
-
     def notation(self, *children: str) -> str:
         return self.name
 
@@ -288,9 +273,8 @@ class _Mean(Formula):
         object.__setattr__(self, "p", p)
         object.__setattr__(self, "slack", slack)
         object.__setattr__(self, "name", name)
-        self.__post_init__()
 
-    def __post_init__(self) -> None:
+    def check(self) -> None:
         kind = type(self).__name__
         if not self.operands:
             raise ValueError(f"{kind}() needs at least one operand: an empty group has no value")
@@ -335,7 +319,7 @@ class Not(Formula):
     operand: Formula
     """The negated formula."""
 
-    def __post_init__(self) -> None:
+    def check(self) -> None:
         check_operands(self, self.operand)
 
     def notation(self, *children: str) -> str:
@@ -362,7 +346,7 @@ class Offset(Formula):
     """If true, the gradient through the offset is 1 instead of 1 − |δ| in torch and jax, and the value is the same.
     It is a training device, not part of what the formula means. It prints as ↑: `[a]₀.₃↑`."""
 
-    def __post_init__(self) -> None:
+    def check(self) -> None:
         check_operands(self, self.operand)
         if not -1.0 <= self.delta <= 1.0:
             raise ValueError(
@@ -394,7 +378,7 @@ class Power(Formula):
     """If true, the gradient through the power is 1 in torch and jax, and the value is the same. It is a training
     device, not part of what the formula means. It prints as ↑: `a²↑`."""
 
-    def __post_init__(self) -> None:
+    def check(self) -> None:
         check_operands(self, self.operand)
         if not 0.0 < self.w < math.INF:
             raise ValueError(f"importance of {self.operand!r}: the power w must be a finite number > 0, got {self.w}")
@@ -408,7 +392,7 @@ class Power(Formula):
         return ops.power(values[0], self.w, pass_gradient=self.pass_gradient)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Piecewise(Formula):
     """A measurement turned into a fulfillment by straight lines between landmarks. Write it
     `Piecewise(x, points)`.
@@ -423,27 +407,38 @@ class Piecewise(Formula):
     operand: Formula
     """The measurement."""
     points: tuple[tuple[float, float], ...]
-    """The landmarks `(measurement, fulfillment)`: at least two, sorted when stored, no two with the same
-    measurement, and each fulfillment in [0, 1]."""
+    """The landmarks `(measurement, fulfillment)` as written: at least two, no two with the same measurement, and
+    each fulfillment in [0, 1]. Read them through `landmarks`, which sorts them."""
 
     measurements: ClassVar[tuple[str, ...]] = ("operand",)
 
-    def __post_init__(self) -> None:
+    def __init__(self, operand: Formula, points: Iterable[tuple[float, float]], *, name: str | None = None) -> None:
+        # Landmarks are often written as a list. A node is a key in folds, so they are stored as a tuple, as given.
+        object.__setattr__(self, "operand", operand)
+        object.__setattr__(self, "points", tuple((x, y) for x, y in points))
+        object.__setattr__(self, "name", name)
+
+    @property
+    def landmarks(self) -> tuple[tuple[float, float], ...]:
+        """The landmarks sorted by measurement, as everything that reads them needs them."""
+        return tuple(sorted(self.points))
+
+    def check(self) -> None:
         check_operands(self, self.operand)
-        object.__setattr__(self, "points", tuple(sorted(self.points)))
+        ordered = self.landmarks
         where = f"piecewise({self.operand!r})"
-        if len(self.points) < 2:
-            raise ValueError(f"{where}: give at least two landmarks, got {len(self.points)}")
-        math.check_landmarks(self.points)
-        if not all(0.0 <= y <= 1.0 for _, y in self.points):
-            raise ValueError(f"{where}: fulfillments must lie in [0, 1], got {[y for _, y in self.points]}")
+        if len(ordered) < 2:
+            raise ValueError(f"{where}: give at least two landmarks, got {len(ordered)}")
+        math.check_landmarks(ordered)
+        if not all(0.0 <= y <= 1.0 for _, y in ordered):
+            raise ValueError(f"{where}: fulfillments must lie in [0, 1], got {[y for _, y in ordered]}")
 
     def notation(self, *children: str) -> str:
-        landmarks = ", ".join(f"{_number(x)}→{_number(y)}" for x, y in self.points)
+        landmarks = ", ".join(f"{_number(x)}→{_number(y)}" for x, y in self.landmarks)
         return f"piecewise({children[0]}; {landmarks})"
 
     def compute(self, ops: Ops, *values: Any) -> Any:
-        return ops.piecewise(values[0], self.points)
+        return ops.piecewise(values[0], self.landmarks)
 
 
 def child_fields(node: Formula) -> list[tuple[str, tuple[Formula, ...]]]:
@@ -480,13 +475,10 @@ def _holds_formula(value: object) -> bool:
 
 
 def _copy[F: Formula](node: F, changes: Mapping[str, Any]) -> F:
-    """A copy of a node with some fields changed, checked again by its `__post_init__`."""
+    """A copy of a node with some fields changed."""
     new = object.__new__(type(node))
     for f in fields(node):
         object.__setattr__(new, f.name, changes.get(f.name, getattr(node, f.name)))
-    post_init = getattr(new, "__post_init__", None)
-    if post_init is not None:
-        post_init()
     return new
 
 
