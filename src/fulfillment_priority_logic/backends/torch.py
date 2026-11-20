@@ -13,9 +13,10 @@ _NUMPY_DTYPES = (torch.float16, torch.float32, torch.float64)
 
 
 def inputs(values: Sequence[Any]) -> list[torch.Tensor]:
-    tensors = [v for v in values if isinstance(v, torch.Tensor) and v.is_floating_point()]
-    dtype = functools.reduce(torch.promote_types, (t.dtype for t in tensors)) if tensors else None
-    device = tensors[0].device if tensors else None
+    all_tensors = [v for v in values if isinstance(v, torch.Tensor)]
+    floating = [t for t in all_tensors if t.is_floating_point()]
+    dtype = functools.reduce(torch.promote_types, (t.dtype for t in floating)) if floating else None
+    device = all_tensors[0].device if all_tensors else None
     out = [v if isinstance(v, torch.Tensor) else torch.as_tensor(v, dtype=dtype, device=device) for v in values]
     return [t if t.is_floating_point() else t.to(dtype or torch.get_default_dtype()) for t in out]
 

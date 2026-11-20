@@ -20,15 +20,19 @@ import warp as wp
 from .. import warp_funcs as wf
 from ..math import DEFAULT_SLACK
 
+_FLOAT_DTYPES = (wp.float32, wp.float64)
+
 
 def inputs(values: Sequence[Any]) -> list[Any]:
     arrays = [v for v in values if isinstance(v, wp.array)]
-    dtype = (wp.float64 if any(a.dtype == wp.float64 for a in arrays) else wp.float32) if arrays else None
+    floating = [a for a in arrays if a.dtype in _FLOAT_DTYPES]
+    dtype = (wp.float64 if any(a.dtype == wp.float64 for a in floating) else wp.float32) if floating else None
     device = arrays[0].device if arrays else "cpu"
     out = []
     for v in values:
         if isinstance(v, wp.array):
-            out.append(v if v.is_contiguous else v.contiguous())
+            c = v if v.is_contiguous else v.contiguous()
+            out.append(c if c.dtype in _FLOAT_DTYPES else _cast_array(c, dtype or wp.float32))
             continue
         a = np.atleast_1d(np.asarray(v))
         t = dtype or (wp.float64 if a.dtype == np.float64 else wp.float32)
@@ -131,6 +135,20 @@ def _piecewise(x: wp.array(dtype=Any), xs: wp.array(dtype=Any), ys: wp.array(dty
     out[i] = wf.piecewise(x[i], xs, ys)
 
 
+@wp.kernel
+def _cast(src: wp.array(dtype=Any), out: wp.array(dtype=Any)):
+    i = wp.tid()
+    out[i] = out.dtype(src[i])
+
+
+def _cast_array(x: Any, dtype: Any) -> Any:
+    flat = x.flatten()
+    out = wp.empty((flat.shape[0],), dtype=dtype, device=x.device)
+    if flat.shape[0]:
+        wp.launch(_cast, dim=flat.shape[0], inputs=[flat], outputs=[out], device=x.device)
+    return out.reshape(x.shape)
+
+
 def _numpy_dtype(dtype: Any) -> Any:
     return np.float64 if dtype == wp.float64 else np.float32
 
@@ -138,25 +156,29 @@ def _numpy_dtype(dtype: Any) -> Any:
 def _columns(xs: Sequence[Any]) -> tuple[Any, tuple[int, ...]]:
     """The operands as the columns of a (batch, operands) array, and the batch shape."""
     shapes = [tuple(x.shape) for x in xs]
-    batch = max(shapes, key=math.prod)
-    if any(math.prod(s) != 1 and s != batch for s in shapes):
+    non_unit = [s for s in shapes if math.prod(s) != 1]
+    batch = non_unit[0] if non_unit else shapes[0]
+    if any(s != batch for s in non_unit):
         raise ValueError(f"the warp backend broadcasts only single values against a batch, got shapes {shapes}")
     dtype = wp.float64 if any(x.dtype == wp.float64 for x in xs) else wp.float32
     out = wp.empty((math.prod(batch), len(xs)), dtype=dtype, device=xs[0].device)
-    for col, x in enumerate(xs):
-        wp.launch(_gather_column, dim=out.shape[0], inputs=[x.flatten(), col], outputs=[out], device=out.device)
+    if out.shape[0]:
+        for col, x in enumerate(xs):
+            wp.launch(_gather_column, dim=out.shape[0], inputs=[x.flatten(), col], outputs=[out], device=out.device)
     return out, batch
 
 
 def _reduce_rows(rows: Any, p: float, slack: float, flip: int) -> Any:
     out = wp.empty((rows.shape[0],), dtype=rows.dtype, device=rows.device)
-    args = [rows, rows.dtype(p), rows.dtype(slack), flip]
-    wp.launch(_p_mean_rows, dim=rows.shape[0], inputs=args, outputs=[out], device=rows.device)
+    if rows.shape[0]:
+        args = [rows, rows.dtype(p), rows.dtype(slack), flip]
+        wp.launch(_p_mean_rows, dim=rows.shape[0], inputs=args, outputs=[out], device=rows.device)
     return out
 
 
 def _map(kernel: Any, x: Any, *args: Any) -> Any:
     flat = x.flatten()
     out = wp.empty((flat.shape[0],), dtype=x.dtype, device=x.device)
-    wp.launch(kernel, dim=flat.shape[0], inputs=[flat, *args], outputs=[out], device=x.device)
+    if flat.shape[0]:
+        wp.launch(kernel, dim=flat.shape[0], inputs=[flat, *args], outputs=[out], device=x.device)
     return out.reshape(x.shape)

@@ -1,5 +1,6 @@
 """The jax backend. It also makes `Result` a pytree, so that a jitted function can return one."""
 
+import functools
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -13,8 +14,10 @@ from ..ops import ArrayOps
 
 
 def inputs(values: Sequence[Any]) -> list[jax.Array]:
-    arrays = [jnp.asarray(v) for v in values]
-    return [a if jnp.issubdtype(a.dtype, jnp.floating) else a.astype(float) for a in arrays]
+    floating = [v.dtype for v in values if isinstance(v, jax.Array) and jnp.issubdtype(v.dtype, jnp.floating)]
+    dtype = functools.reduce(jnp.result_type, floating) if floating else None
+    out = [v if isinstance(v, jax.Array) else jnp.asarray(v, dtype=dtype) for v in values]
+    return [a if jnp.issubdtype(a.dtype, jnp.floating) else a.astype(dtype or float) for a in out]
 
 
 def ops(given: Mapping[str, Any]) -> ArrayOps:

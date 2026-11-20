@@ -129,8 +129,22 @@ def test_plain_numbers_follow_the_arrays():
         assert r.value.dtype == torch.float32, f"torch: {r.value.dtype}"
         meta = evaluate(a & b, {"a": torch.ones(3, device="meta"), "b": 0.5}, check=False)
         assert meta.value.device.type == "meta", "torch: a plain number did not follow the tensor's device"
+        meta_int = evaluate(
+            Piecewise(d, ((0, 0), (10, 1))) & b,
+            {"d": torch.tensor([2, 5], device="meta"), "b": 0.5},
+            check=False,
+        )
+        assert meta_int.value.device.type == "meta", "torch: a plain number did not follow an integer tensor's device"
         vmapped = torch.func.vmap(lambda v: evaluate(a & b, {"a": v, "b": 0.5}).value)(torch.rand(4, 3))
         assert vmapped.shape == (4, 3), "torch: the check broke a torch.func transform"
+    if "jax" in BACKENDS:
+        import jax.numpy as jnp
+
+        r = evaluate(
+            Piecewise(d, ((0, 0), (10, 1))) & a & b,
+            {"d": jnp.array([2, 5], dtype=jnp.int32), "a": jnp.array([0.5, 0.8], dtype=jnp.float32), "b": 1},
+        )
+        assert r.value.dtype == jnp.float32, f"jax: integer inputs promoted float32 to {r.value.dtype}"
     if "warp" in BACKENDS:
         import warp as wp
 
@@ -139,6 +153,10 @@ def test_plain_numbers_follow_the_arrays():
         assert r.value.dtype == wp.float32 and r.value.device == x.device, "warp: device or float type changed"
         expected = evaluate(a & b, {"a": x.numpy(), "b": 0.5}).value
         assert np.abs(r.value.numpy() - expected).max() < 1e-6, "warp: a non-contiguous array was read wrongly"
+        int_r = evaluate(Piecewise(d, ((0, 0), (10, 1))), {"d": wp.array([2, 5], dtype=wp.int32, device="cpu")})
+        assert np.allclose(int_r.value.numpy(), [0.2, 0.5]), f"warp: integer input gave {int_r.value.numpy()}"
+        empty = evaluate(a & b, {"a": wp.empty((0,), dtype=wp.float32, device="cpu"), "b": 0.5})
+        assert empty.value.shape == (0,), f"warp: empty batch got shape {empty.value.shape}"
 
 
 def test_a_number_where_a_formula_belongs_is_explained():
