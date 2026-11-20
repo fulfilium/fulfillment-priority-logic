@@ -51,6 +51,19 @@ class Ops(Protocol):
         """`1 − x`."""
         ...
 
+    def scale_gradient(self, x: Any, k: Any) -> Any:
+        """`x` with k times its gradient (`math.scale_gradient`). `Pull` computes with it."""
+        ...
+
+    def with_gradient_of(self, value: Any, climb: Any) -> Any:
+        """`value` forward, the gradient of `climb` backward (`math.with_gradient_of`). `Surrogate` computes with
+        it."""
+        ...
+
+    def ladder(self, stages: Sequence[Any], levels: Sequence[float], p: float) -> Any:
+        """Ordered stages read on [0, 1] (`math.ladder`). `Ladder` computes with it."""
+        ...
+
 
 @dataclass(frozen=True)
 class ArrayOps:
@@ -86,3 +99,12 @@ class ArrayOps:
 
     def negate(self, x: Any) -> Any:
         return 1.0 - x
+
+    def scale_gradient(self, x: Any, k: Any) -> Any:
+        return math.scale_gradient(x, k)
+
+    def with_gradient_of(self, value: Any, climb: Any) -> Any:
+        return math.with_gradient_of(value, climb)
+
+    def ladder(self, stages: Sequence[Any], levels: Sequence[float], p: float) -> Any:
+        return math.ladder(tuple(self.stack(stages)), levels, p)

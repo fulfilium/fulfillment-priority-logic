@@ -167,6 +167,67 @@ def offset(x: Any, delta: float, *, pass_gradient: bool = False) -> Any:
     return _stop_gradient(lib, y) + (x - _stop_gradient(lib, x))
 
 
+def scale_gradient(x: Any, k: Any) -> Any:
+    """`x` with k times its gradient: the value is exactly `x`, because `x - stop_gradient(x)` is exactly 0. `k` is
+    a number or an array that carries no gradient. A training device: it changes how hard a term pulls, not what
+    it means.
+
+    >>> float(scale_gradient(0.4, 3.0))
+    0.4
+    """
+    lib = library(x)
+    x = _asarray(lib, x)
+    held = _stop_gradient(lib, x)
+    return held + k * (x - held)
+
+
+def with_gradient_of(value: Any, climb: Any) -> Any:
+    """`value` forward, the gradient of `climb` backward. A score keeps its plain meaning (an unmet event reads 0),
+    while an optimizer climbs `climb`, which may give such an event a floor or join it with guidance.
+
+    >>> float(with_gradient_of(0.0, 0.3))
+    0.0
+    """
+    lib = library(value)
+    value, climb = _asarray(lib, value), _asarray(lib, climb)
+    return _stop_gradient(lib, value) + (climb - _stop_gradient(lib, climb))
+
+
+def check_levels(levels: Sequence[float], stages: int) -> None:
+    """Refuse ladder levels that are not one a stage, strictly rising from above 0, and ending at 1."""
+    if len(levels) != stages or not levels:
+        raise ValueError(f"a ladder needs one level a stage, got {len(levels)} levels for {stages} stages")
+    if not all(b > a for a, b in zip((0.0, *levels[:-1]), levels, strict=True)) or levels[-1] != 1.0:
+        raise ValueError(f"ladder levels must rise strictly from above 0 and end at 1, got {list(levels)}")
+
+
+def ladder(stages: Sequence[Any], levels: Sequence[float], p: float = -1.0, slack: float = DEFAULT_SLACK) -> Any:
+    """Ordered stages read on [0, 1]: 0 when nothing is done, 1 when every stage is, and `levels` saying what the
+    ground between is worth.
+
+    Rung k joins the stages up to k, `rung_k = p_mean(rung_{k-1}, s_k)`, and the value is
+    `sum_k (level_k - level_{k-1}) * rung_k`. So when stages 1..k are met and stage k+1 is partway, the value lies
+    between `level_k` and `level_{k+1}`, and it rises with every stage. Stage k's gradient is scaled by
+    `rung_{k-1}`, held fixed: a stage pulls as far as the stages before it are met, and a later stage never pulls an
+    earlier one down.
+
+    >>> round(float(ladder([1.0, 0.0], levels=(0.4, 1.0))), 3)
+    0.4
+    """
+    check_levels(levels, len(stages))
+    lib = library(stages[0])
+    xp = _namespace(lib)
+    value, rung, below = 0.0, None, 0.0
+    for s, level in zip(stages, levels, strict=True):
+        s = _asarray(lib, s)
+        if rung is not None:
+            s = p_mean(xp.stack([rung, scale_gradient(s, _stop_gradient(lib, rung))]), p, slack, axis=0)
+        rung = s
+        value = value + (level - below) * rung
+        below = level
+    return value
+
+
 def piecewise(x: Any, points: Sequence[tuple[float, float]]) -> Any:
     """Straight lines between landmarks `(x, y)`, flat beyond the first and the last one, and NaN for NaN.
 
