@@ -134,7 +134,7 @@ def test_the_power_gradient_is_its_slope_finite_at_zero_or_one_when_passed():
 def test_min_fulfillment_bounds_every_input():
     """Theorem IV.1: no input is below the bound that its mean certifies, and the bound is reached."""
     rng = np.random.default_rng(1)
-    for n, p in ((2, -4.0), (3, -1.0), (5, -0.5), (4, 0.0), (3, 1.0), (3, 2.0)):
+    for n, p in ((2, -1e4), (2, -4.0), (3, -1.0), (5, -0.5), (4, -1e-15), (4, 0.0), (4, 1e-15), (3, 1.0), (3, 2.0)):
         x = rng.random((2000, n)).clip(1e-3)
         scores = math.p_mean(x, p, axis=1)
         bounds = np.array([min_fulfillment(float(s), n, p) for s in scores])

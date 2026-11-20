@@ -210,8 +210,8 @@ def min_fulfillment(score: float, n: int, p: float) -> float:
     >>> round(min_fulfillment(0.9, n=3, p=-1), 3)
     0.75
     """
-    if not 0.0 <= score <= 1.0 or n < 1:
-        raise ValueError(f"need a score in [0, 1] and n >= 1, got score={score}, n={n}")
+    if not 0.0 <= score <= 1.0 or n < 1 or p != p:
+        raise ValueError(f"need a score in [0, 1], n >= 1 and a non-NaN p, got score={score}, n={n}, p={p}")
     if n == 1 or p == -INF:
         return score
     if p == INF:
@@ -220,8 +220,12 @@ def min_fulfillment(score: float, n: int, p: float) -> float:
         return score**n
     if score == 0.0:
         return 0.0
-    inner = n * score**p - n + 1
-    return inner ** (1 / p) if inner > 0 else 0.0
+    if p < 0:
+        # Factor out score so -p * log(score) <= 0 never overflows, and expm1/log1p stay accurate as p -> 0.
+        t = -(n - 1) * np.expm1(-p * np.log(score))
+        return float(score * np.exp(np.log1p(t) / p))
+    t = n * np.expm1(p * np.log(score))
+    return float(np.exp(np.log1p(t) / p)) if t > -1.0 else 0.0
 
 
 def stop_gradient(x: Any) -> Any:
