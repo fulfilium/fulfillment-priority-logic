@@ -131,6 +131,8 @@ and `ops`, the operators of the current backend: `p_mean`, `dual_p_mean`, `offse
 `math.py`, `ops.stop_gradient`, and `ops.xp`, the array namespace (numpy, torch or jax.numpy). So a primitive node
 runs on every one of those backends, with gradients. The package's own nodes are written the same way. A node's
 children are the fields that hold a formula or a tuple of formulas; a formula held in any other shape is refused.
+A node is plain data: building one checks nothing. A node with rules for its parameters states them in a `check`
+method, and `check(formula)`, which `evaluate` runs, calls it on every node and checks the fields and names once.
 
 ```python
 from dataclasses import dataclass

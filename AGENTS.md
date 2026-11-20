@@ -27,9 +27,11 @@ Never skip, loosen or delete a test to make it pass. Find the cause.
    one. `evaluate` expands derived nodes first, and reads the inputs and their roles from the expanded tree.
 3. **Closed sets are `Literal`s, and a `match` over one ends with `case _: assert_never(x)`,** as the libraries in
    `math.py` do. Do not use `Enum`, and do not use a `bool` or `None` to mean a state.
-4. **Check a value once, where it is made, and trust it afterwards.** `Offset.__post_init__` refuses a δ outside
-   [−1, 1]; `Offset.compute` does not check it again. Do not check what the types already say, except where
-   untyped code enters: `check_operands` refuses a number given as an operand, with a hint.
+4. **Check a formula in one pass, and trust it afterwards.** Nodes are plain frozen dataclasses with no
+   `__post_init__`. The `check` pass runs each node's `check` method, checks child fields and checks names once
+   before evaluation; `Offset.check` refuses a δ outside [−1, 1], and `Offset.compute` does not check it again.
+   Do not check what the types already say, except where untyped code enters: `check_operands` refuses a number
+   given as an operand, with a hint.
 5. **The numerics live in `math.py`, and for Warp in `warp_funcs.py`, and nowhere else.** `math.py` imports only
    numpy and the standard library, and not the standard `math` module, so a reader can copy it alone.
 6. **A backend is one file in `backends/`** that converts inputs to its arrays and reads results back
