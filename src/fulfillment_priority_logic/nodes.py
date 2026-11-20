@@ -392,6 +392,90 @@ class Power(Formula):
         return ops.power(values[0], self.w, pass_gradient=self.pass_gradient)
 
 
+@dataclass(frozen=True)
+class Pull(Formula):
+    """The same value with k times its gradient. Write it `Pull(a, k)`.
+
+    A training device, not part of what the formula means: it changes how hard a term pulls on an optimizer
+    (`math.scale_gradient`), and its value is exactly the operand's.
+    """
+
+    operand: Formula
+    """The formula whose pull changes."""
+    k: float
+    """The factor on the gradient."""
+
+    def check(self) -> None:
+        check_operands(self, self.operand)
+
+    def notation(self, *children: str) -> str:
+        return f"pull({children[0]}; {self.k:g})"
+
+    def compute(self, ops: Ops, *values: Any) -> Any:
+        return ops.scale_gradient(values[0], self.k)
+
+
+@dataclass(frozen=True, init=False)
+class Ladder(Formula):
+    """Ordered stages read on [0, 1], with `levels` saying what each stage met is worth. Write it
+    `Ladder(reach, grasp, lift, levels=(0.2, 0.5, 1))`.
+
+    The value is 0 when nothing is done and 1 when every stage is; with the first k stages met and the next one
+    partway, it lies between their levels (`math.ladder`). A stage pulls on an optimizer as far as the stages
+    before it are met.
+
+    >>> Ladder(Var("reach"), Var("grasp"), levels=(0.3, 1))
+    ladder₋₁(reach, grasp; 0.3, 1)
+    """
+
+    stages: tuple[Formula, ...]
+    """The stages in order, the goal last."""
+    levels: tuple[float, ...]
+    """What the ladder reads when each stage is met, one a stage: rising strictly, the last one 1."""
+    p: float
+    """The exponent of the mean that joins a stage with the ones before it."""
+
+    def __init__(self, *stages: Formula, levels: Sequence[float], p: float = -1.0, name: str | None = None) -> None:
+        object.__setattr__(self, "stages", stages)
+        object.__setattr__(self, "levels", tuple(float(x) for x in levels))
+        object.__setattr__(self, "p", p)
+        object.__setattr__(self, "name", name)
+
+    def check(self) -> None:
+        check_operands(self, *self.stages)
+        math.check_levels(self.levels, len(self.stages))
+
+    def notation(self, *children: str) -> str:
+        return f"ladder{subscript(self.p)}({', '.join(children)}; {', '.join(f'{x:g}' for x in self.levels)})"
+
+    def compute(self, ops: Ops, *values: Any) -> Any:
+        return ops.ladder(values, self.levels, self.p)
+
+
+@dataclass(frozen=True)
+class Surrogate(Formula):
+    """A formula that reports one thing and is climbed through another. Write it `Surrogate(goal, climb)`.
+
+    The value is the goal's, so a score keeps its meaning (an unmet event reads 0); the gradient is the climb's,
+    which may give that event a floor or join it with guidance (`math.with_gradient_of`). Wrap the whole score, not
+    a factor inside it: a factor whose value is near 0 still zeroes the other factors' gradients.
+    """
+
+    value: Formula
+    """What the formula reports."""
+    climb: Formula
+    """What an optimizer climbs: its gradient is the node's gradient."""
+
+    def check(self) -> None:
+        check_operands(self, self.value, self.climb)
+
+    def notation(self, *children: str) -> str:
+        return f"surrogate({'; '.join(children)})"
+
+    def compute(self, ops: Ops, *values: Any) -> Any:
+        return ops.with_gradient_of(values[0], values[1])
+
+
 @dataclass(frozen=True, init=False)
 class Piecewise(Formula):
     """A measurement turned into a fulfillment by straight lines between landmarks. Write it

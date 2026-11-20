@@ -18,7 +18,7 @@ import numpy as np
 import warp as wp
 
 from .. import warp_funcs as wf
-from ..math import DEFAULT_SLACK
+from ..math import DEFAULT_SLACK, check_levels
 
 _FLOAT_DTYPES = (wp.float32, wp.float64)
 
@@ -91,6 +91,21 @@ class WarpOps:
     def stop_gradient(self, x: Any) -> Any:
         return x
 
+    def scale_gradient(self, x: Any, k: Any) -> Any:
+        return x  # values only
+
+    def with_gradient_of(self, value: Any, climb: Any) -> Any:
+        return value  # values only
+
+    def ladder(self, stages: Sequence[Any], levels: Sequence[float], p: float) -> Any:
+        check_levels(levels, len(stages))
+        value, rung, below = None, None, 0.0
+        for s, level in zip(stages, levels, strict=True):
+            rung = s if rung is None else self.p_mean([rung, s], p)
+            value = _axpy(rung, level - below, value)
+            below = level
+        return value
+
 
 def ops(given: Mapping[str, Any]) -> WarpOps:
     return WarpOps(given)
@@ -109,6 +124,35 @@ def _gather_column(src: wp.array(dtype=Any), col: int, out: wp.array2d(dtype=Any
     if src.shape[0] == 1:
         k = 0
     out[i, col] = out.dtype(src[k])
+
+
+@wp.kernel
+def _axpy_kernel(x: wp.array(dtype=Any), a: Any, y: wp.array(dtype=Any), out: wp.array(dtype=Any)):
+    i = wp.tid()
+    xi, yi = i, i
+    if x.shape[0] == 1:
+        xi = 0
+    if y.shape[0] == 1:
+        yi = 0
+    out[i] = a * x[xi] + y[yi]
+
+
+def _axpy(x: Any, a: float, y: Any) -> Any:
+    """`a * x + y`, one of them broadcast if it holds one value; `a * x` when y is None."""
+    if y is None:
+        return _map(_scale, x, x.dtype(a))
+    flat_x, flat_y = x.flatten(), y.flatten()
+    shape = x.shape if math.prod(x.shape) >= math.prod(y.shape) else y.shape
+    out = wp.empty((max(flat_x.shape[0], flat_y.shape[0]),), dtype=x.dtype, device=x.device)
+    if out.shape[0]:
+        wp.launch(_axpy_kernel, dim=out.shape[0], inputs=[flat_x, x.dtype(a), flat_y], outputs=[out], device=x.device)
+    return out.reshape(shape)
+
+
+@wp.kernel
+def _scale(x: wp.array(dtype=Any), a: Any, out: wp.array(dtype=Any)):
+    i = wp.tid()
+    out[i] = a * x[i]
 
 
 @wp.kernel

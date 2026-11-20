@@ -7,9 +7,12 @@ from conftest import BACKENDS, array, to_numpy
 
 from fulfillment_priority_logic import (
     And,
+    Ladder,
     Offset,
     Or,
     Piecewise,
+    Pull,
+    Surrogate,
     Var,
     check,
     evaluate,
@@ -209,3 +212,25 @@ def test_check_pass_catches_invalid_formulas():
             pass
         else:
             raise AssertionError(f"{case}: check() accepted an invalid formula")
+
+
+def test_training_devices_keep_the_value_and_a_ladder_reads_its_levels():
+    """Laws. `Pull` and `Surrogate` report their operand's value on every backend, and pass k times the gradient
+    and the climb's gradient in torch and jax. A ladder whose first k stages are met, the rest unmet, reads level
+    k."""
+    ladder = Ladder(a, b, c, levels=(0.2, 0.5, 1.0))
+    met = {"none": ((0, 0, 0), 0.0), "one": ((1, 0, 0), 0.2), "two": ((1, 1, 0), 0.5), "all": ((1, 1, 1), 1.0)}
+    for backend in BACKENDS:
+        for case, (stages, level) in met.items():
+            values = {k: array(backend, [float(v)]) for k, v in zip("abc", stages, strict=True)}
+            got = float(to_numpy(evaluate(ladder, values).value)[0])
+            assert abs(got - level) < 1e-5, f"{backend}, {case} stages met: read {got}, not {level}"
+        values = {"a": array(backend, [0.3]), "b": array(backend, [0.7])}
+        for node in (Pull(a, 3.0), Surrogate(a, ~b)):
+            got = float(to_numpy(evaluate(node, values).value)[0])
+            assert abs(got - 0.3) < 1e-6, f"{backend}, {node!r}: value {got}, not the operand's 0.3"
+    for backend in (b for b in BACKENDS if b in ("torch", "jax")):
+        pulled = gradient(backend, lambda x: evaluate(Pull(a, 3.0), {"a": x}).value.sum(), [0.3, 0.6])
+        assert np.allclose(pulled, 3.0), f"{backend}: Pull passed {pulled}, not 3"
+        climbed = gradient(backend, lambda x: evaluate(Surrogate(a, ~a), {"a": x}).value.sum(), [0.3, 0.6])
+        assert np.allclose(climbed, -1.0), f"{backend}: Surrogate passed {climbed}, not the climb's -1"
