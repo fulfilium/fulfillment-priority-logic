@@ -71,11 +71,11 @@ class Formula:
         return Power(self, w)
 
     def check_naming(self) -> None:
-        """Refuse a name that is not an identifier, or that two different parts below this node share. Every node
-        runs it when it is built. A family of nodes with its own rule for names overrides it."""
+        """Refuse a name that is not an identifier. Every node runs it when it is built; a family of nodes with its
+        own rule for names overrides it. Two parts sharing a name are found by `check`, which reads the whole tree
+        once: a check at every named node would read its subtree again each time."""
         if self.name is not None:
             check_name(self.name)
-            check_names(self)
 
     def named(self, name: str) -> Self:
         """The same formula with a name: `(a & b).named("both")`. A node built by its class takes `name=` instead."""
@@ -86,6 +86,8 @@ class Formula:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         # This runs before @dataclass. Setting __repr__ keeps the decorator from writing its own, and the generated
         # __init__ calls the __post_init__ set here, which runs the node's own checks and then checks its fields.
+        # Only a class's own __post_init__ is wrapped: a subclass that defines none inherits its parent's wrapper,
+        # which already runs the checks, and wrapping it again would run them twice.
         super().__init_subclass__(**kwargs)
         if cls.compute is Formula.compute and cls.expand is Formula.expand:
             raise TypeError(f"{cls.__name__} must define compute or expand")
@@ -97,7 +99,9 @@ class Formula:
             raise TypeError(f"{cls.__name__}.measurements names {unknown}, which are not fields of {cls.__name__}")
         if "__repr__" not in cls.__dict__:
             cls.__repr__ = Formula.__repr__
-        own = getattr(cls, "__post_init__", None)
+        own = cls.__dict__.get("__post_init__")
+        if own is None and getattr(getattr(cls, "__post_init__", None), "checks_node", False):
+            return
 
         def __post_init__(self: Formula) -> None:
             if own is not None:
@@ -105,6 +109,7 @@ class Formula:
             _check_fields(self)
             self.check_naming()
 
+        __post_init__.checks_node = True  # type: ignore[attr-defined]
         cls.__post_init__ = __post_init__  # type: ignore[attr-defined]
 
     def __repr__(self) -> str:
@@ -199,7 +204,7 @@ def rename(root: Formula, names: Mapping[str, str]) -> Formula:
         return _copy(node, changes) if changes else node
 
     renamed = fold(root, step)
-    check_names(renamed)
+    check(renamed)
     return renamed
 
 
@@ -209,8 +214,10 @@ def formula_text(root: Formula) -> str:
     return root.notation(*(texts[c] for c in children(root)))
 
 
-def check_names(root: Formula) -> None:
-    """Refuse a name that is given to two different parts, because `result["name"]` could not tell them apart."""
+def check(root: Formula) -> None:
+    """Refuse a name that is given to two different parts, because `result["name"]` could not tell them apart. Every
+    other rule is checked by a node when it is built; this one needs the whole tree, so `evaluate` and `rename` run
+    it once."""
     seen: dict[str, Formula] = {}
     for n in nodes(root):
         if n.name is not None and seen.setdefault(n.name, n) is not n:

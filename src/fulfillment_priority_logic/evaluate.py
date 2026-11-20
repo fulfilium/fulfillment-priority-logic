@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, overload
 import numpy as np
 
 from . import backends
-from .nodes import Formula, Var, check_names, child_fields, fold, fold_all, leaves, nodes, with_children
+from .nodes import Formula, Var, child_fields, fold, fold_all, leaves, nodes, with_children
+from .nodes import check as check_formula  # `evaluate` has an argument named `check`
 from .printing import render_line, render_tree
 
 if TYPE_CHECKING:
@@ -72,10 +73,12 @@ def evaluate(
     >>> round(float(result.value), 6)
     0.5
     """
-    check_names(formula)
+    check_formula(formula)
     # Derived nodes are expanded first, so the inputs and their roles are read from the nodes that compute.
     image = fold_all(formula, lambda node, below: _primitive(with_children(node, below)), {})
     primitive = image[formula]
+    if primitive is not formula:  # an expansion may bring names of its own
+        check_formula(primitive)
     expected = sorted({v.name for v in leaves(primitive)})
     missing = [n for n in expected if n not in values]
     if missing:

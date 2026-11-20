@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from conftest import BACKENDS, array, to_numpy
 
-from fulfillment_priority_logic import And, Formula, Offset, Ops, Piecewise, Var, evaluate
+from fulfillment_priority_logic import And, Formula, Offset, Ops, Piecewise, Var, check, evaluate
 from fulfillment_priority_logic.nodes import subscript
 
 
@@ -130,3 +130,42 @@ def test_measurements_must_name_fields():
         assert "distnace" in str(e), str(e)
     else:
         raise AssertionError("a measurements entry that names no field was accepted")
+
+
+def test_a_node_runs_its_checks_once_and_names_are_checked_across_the_tree():
+    """Bug guards. A subclass of a node with its own checks ran the field and name checks twice, because its parent's
+    wrapper was wrapped again. And building a named node read its whole subtree for repeated names, so a deep named
+    chain took quadratic time; names are now checked across the tree once, by `check`, which `evaluate` runs."""
+    runs = []
+
+    @dataclass(frozen=True)
+    class Checked(Formula):
+        operand: Formula
+
+        def __post_init__(self) -> None:
+            pass
+
+        def check_naming(self) -> None:
+            runs.append(self)
+            super().check_naming()
+
+        def compute(self, ops: Ops, *values: Any) -> Any:
+            return values[0]
+
+    @dataclass(frozen=True)
+    class Child(Checked):
+        pass
+
+    Child(Var("a"))
+    assert len(runs) == 1, f"the checks ran {len(runs)} times for one node"
+    twice = And(Offset(Var("a"), 0.1, name="x"), Offset(Var("b"), 0.2, name="x"))  # one name, two parts
+    for case, run in {
+        "check": lambda: check(twice),
+        "evaluate": lambda: evaluate(twice, {"a": 0.5, "b": 0.5}),
+    }.items():
+        try:
+            run()
+        except ValueError as e:
+            assert "two different parts" in str(e), f"{case}: {e}"
+        else:
+            raise AssertionError(f"{case}: one name for two different parts was accepted")
