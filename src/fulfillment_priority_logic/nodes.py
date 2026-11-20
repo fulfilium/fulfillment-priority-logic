@@ -119,13 +119,19 @@ def children(node: Formula) -> tuple[Formula, ...]:
     return tuple(child for _, group in child_fields(node) for child in group)
 
 
-def with_children[F: Formula](node: F, new: Sequence[Formula]) -> F:
-    """The same node over new children, in the order of `children`, with the same parameters and name."""
+def _child_changes(node: Formula, new: Sequence[Formula]) -> dict[str, Any]:
     rest = iter(new)
     changes: dict[str, Any] = {}
     for name, group in child_fields(node):
         replaced = tuple(next(rest) for _ in group)
-        changes[name] = replaced if isinstance(getattr(node, name), tuple) else replaced[0]
+        if any(n is not o for n, o in zip(replaced, group, strict=True)):  # identity: `!=` compares whole subtrees
+            changes[name] = replaced if isinstance(getattr(node, name), tuple) else replaced[0]
+    return changes
+
+
+def with_children[F: Formula](node: F, new: Sequence[Formula]) -> F:
+    """The same node over new children, in the order of `children`, with the same parameters and name."""
+    changes = _child_changes(node, new)
     return _copy(node, changes) if changes else node
 
 
@@ -184,12 +190,15 @@ def rename(root: Formula, names: Mapping[str, str]) -> Formula:
     for new in names.values():
         check_name(new)
 
-    def step(n: Formula) -> Formula:
-        if n.name is None or n.name not in names:
-            return n
-        return Var(names[n.name]) if isinstance(n, Var) else _copy(n, {"name": names[n.name]})
+    def step(node: Formula, below: tuple[Formula, ...]) -> Formula:
+        changes = _child_changes(node, below)
+        if node.name is not None and node.name in names:
+            if isinstance(node, Var):
+                return Var(names[node.name])
+            changes["name"] = names[node.name]
+        return _copy(node, changes) if changes else node
 
-    renamed = transform(root, step)
+    renamed = fold(root, step)
     check_names(renamed)
     return renamed
 

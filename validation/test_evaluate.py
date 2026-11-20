@@ -100,13 +100,16 @@ def test_names_and_rewrites_never_change_a_score():
     values = inputs(8)
     score = to_numpy(evaluate(SPEC, values).value)
     rewrites = {
-        "a name": SPEC.named("whole"),
-        "a renamed input": rename(SPEC, {"a": "z"}),
-        "the identity rewrite": transform(SPEC, lambda n: n),
-        "a part replaced by itself": replace(SPEC, c, c),
+        "a name": (SPEC.named("whole"), values),
+        "a renamed input": (rename(SPEC, {"a": "z"}), {("z" if k == "a" else k): v for k, v in values.items()}),
+        "swapped parent and child names": (
+            rename(SPEC, {"a": "either", "either": "a"}),
+            {("either" if k == "a" else k): v for k, v in values.items()},
+        ),
+        "the identity rewrite": (transform(SPEC, lambda n: n), values),
+        "a part replaced by itself": (replace(SPEC, c, c), values),
     }
-    for case, formula in rewrites.items():
-        renamed = {("z" if k == "a" and case == "a renamed input" else k): v for k, v in values.items()}
+    for case, (formula, renamed) in rewrites.items():
         assert np.array_equal(to_numpy(evaluate(formula, renamed).value), score), case
     assert transform(SPEC, lambda n: n) == SPEC and hash(transform(SPEC, lambda n: n)) == hash(SPEC)
     assert Offset(a, 0.3, name="later") == Offset(a, 0.3).named("later"), "a name given to the class or by .named"
