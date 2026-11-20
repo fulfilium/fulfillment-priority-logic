@@ -193,6 +193,33 @@ def test_the_gradient_of_a_near_zero_input_keeps_its_digits():
         assert g is not None and np.allclose(g, 0.25, rtol=1e-5), f"{backend}: {g}"
 
 
+def test_zero_slack_gradients_have_no_nan():
+    """With slack = 0 an input at 0 must not turn gradients to NaN, and a zero slice keeps the slope of the formula's
+    limit: for p < 0 the only zero moves the mean by n^(-1/p) times its change, so a part at 0 is still pulled up."""
+    cases = {
+        "p = 1 with a zero": (1.0, [0.0, 0.5], [0.5, 0.5]),
+        "p = 2 with a zero": (2.0, [0.0, 0.5], [0.0, 1.0 / np.sqrt(2.0)]),
+        "p = -1 with a zero": (-1.0, [0.0, 0.5], [2.0, 0.0]),
+        "p = -2 with a zero": (-2.0, [0.0, 0.5, 0.25], [np.sqrt(3.0), 0.0, 0.0]),
+        "p = -1 with two zeros": (-1.0, [0.0, 0.0, 0.5], [0.0, 0.0, 0.0]),
+        "p = 2 all zeros": (2.0, [0.0, 0.0], [1.0 / np.sqrt(2.0), 1.0 / np.sqrt(2.0)]),
+    }
+    for name, (p, vals, expected) in cases.items():
+        grads = {}
+        if "torch" in BACKENDS:
+            import torch
+
+            t = torch.tensor(vals, dtype=torch.float64, requires_grad=True)
+            math.p_mean(t, p, slack=0.0).backward()
+            grads["torch"] = None if t.grad is None else t.grad.numpy()
+        if "jax" in BACKENDS:
+            import jax
+
+            grads["jax"] = np.asarray(jax.grad(lambda v, p=p: math.p_mean(v, p, slack=0.0))(jax.numpy.asarray(vals)))
+        for backend, g in grads.items():
+            assert g is not None and np.allclose(g, expected, rtol=1e-6, atol=1e-12), f"{backend}, {name}: {g}"
+
+
 def test_a_nan_measurement_is_never_a_score():
     """A bug guard: NaN went through the landmark comparisons and came out as the first landmark's value."""
     spec = Piecewise(Var("d"), ((0, 1), (10, 0.1), (60, 0)))

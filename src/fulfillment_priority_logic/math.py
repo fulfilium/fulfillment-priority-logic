@@ -86,13 +86,30 @@ def p_mean(x: Any, p: float, slack: float = DEFAULT_SLACK, axis: Axis = None) ->
                 # s is 0 only when ε = 0 and the min (p < 0) or every input (p > 0) is 0. The mean is 0 then.
                 positive = s > 0
                 safe = xp.where(positive, s, 1.0)
-                u = p * xp.log(shifted / safe)
-                # torch and jax differentiate expm1(u) as expm1(u) + 1, which cancels to a few digits when exp(u)
-                # is tiny (an input near 0 under p > 0). The value stays expm1's; the gradient is exp(u)'s.
-                e = xp.exp(u)
+                # Replace ratios in zero slices with 1 so log and r**p stay finite on the unused branch of `where`.
+                r = xp.where(positive, shifted / safe, 1.0)
+                u = p * xp.log(r)
+                # torch and jax differentiate expm1(u) as expm1(u) + 1, which loses digits when exp(u) is tiny, and
+                # differentiate exp(p * log(r)) as 0 / 0 when r = 0 and p >= 1. The value stays expm1's; the gradient
+                # is (r**p)'s.
+                e = r**p
                 term = _stop_gradient(lib, xp.expm1(u)) + (e - _stop_gradient(lib, e))
                 t = _reduce(lib, "mean", term, axes)
-                m = xp.where(positive, safe * xp.exp(xp.log1p(t) / p), 0.0)
+                # A zero slice has the value 0 and a finite slope, from the formula's limit. For p < 0 the slice's
+                # only zero moves the mean by n^(-1/p) times its own change (with two zeros, neither moves it alone);
+                # for p > 0 every input of an all-zero slice does. The slope enters through x - sg(x), exactly 0.
+                # As p -> 0 the slope grows without bound (the geometric mean's is infinite at 0), so it is capped
+                # at 1e30: an infinite slope times a zero change would make the value NaN.
+                n = int(np.prod([shape[a] for a in axes]))
+                ones = xp.ones_like(shifted)
+                zero = xp.where(shifted == 0, ones, 0.0 * ones)
+                if p < 0:
+                    count = n * _reduce(lib, "mean", zero, axes)
+                    zero = xp.where((count > 0.5) & (count < 1.5), zero, 0.0 * ones)
+                lift = zero * (shifted - _stop_gradient(lib, shifted))
+                slope = float(np.exp(min((1.0 - 1.0 / p) * np.log(n), 69.0)))
+                edge = slope * _reduce(lib, "mean", lift, axes)
+                m = xp.where(positive, safe * xp.exp(xp.log1p(t) / p), edge)
             y = m - slack
             # The forward value is exactly the clipped one, because `y - sg(y)` is exactly 0. The gradient is y's.
             sg = _stop_gradient(lib, y)
